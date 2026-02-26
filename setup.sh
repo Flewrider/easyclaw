@@ -268,52 +268,20 @@ check_sudo_access() {
 }
 
 # Step 2: Initialize session ID
-init_session_id() {
-    print_info "Reading session ID created by Claude Code..."
-    local session_file="${USER_HOME}/.claude/session-id"
-
-    if [ -f "$session_file" ]; then
-        SESSION_ID=$(cat "$session_file")
-        print_success "Reusing existing session ID: $SESSION_ID"
-        log "INFO" "Reusing session ID: $SESSION_ID"
-        return 0
-    fi
-
-    # Find the session ID from the most recently created JSONL file
-    # Claude stores sessions at ~/.claude/projects/<encoded-cwd>/<session-id>.jsonl
-    local projects_dir="${USER_HOME}/.claude/projects"
-    local latest_jsonl
-    latest_jsonl=$(find "$projects_dir" -name "*.jsonl" -printf "%T@ %p\n" 2>/dev/null \
-        | sort -n | tail -1 | awk '{print $2}')
-
-    if [ -n "$latest_jsonl" ]; then
-        SESSION_ID=$(basename "$latest_jsonl" .jsonl)
-        mkdir -p "${USER_HOME}/.claude"
-        echo "$SESSION_ID" > "$session_file"
-        chmod 600 "$session_file"
-        print_success "Session ID: $SESSION_ID"
-        log "INFO" "Session ID read from: $latest_jsonl"
-    else
-        print_error "No session found in $projects_dir — did the first launch complete?"
-        return 1
-    fi
-}
-
 # Step 3: First-launch Claude setup — OAuth only, no extra flags
 first_launch_claude() {
-    if [ -f "${USER_HOME}/.claude/claude.json" ]; then
-        print_success "Claude Code already initialized"
+    # Check if already logged in (either auth file location)
+    if [ -f "${USER_HOME}/.claude/claude.json" ] || [ -f "${USER_HOME}/.claude.json" ]; then
+        print_success "Claude Code already authenticated"
         return 0
     fi
 
     print_info "Starting Claude Code initial setup (OAuth login)..."
     echo
     echo -e "  ${YELLOW}A browser window will open for Claude OAuth login.${NC}"
-    echo    "  Log in, then type 'exit' and press Enter to continue setup."
+    echo    "  Log in, then type '/exit' and press Enter to continue setup."
     echo
 
-    # Run plain claude — no session flags, no --dangerously-skip-permissions
-    # IS_SANDBOX=1 only needed if running as root
     local claude_bin="${USER_HOME}/.local/bin/claude"
     local launch_cmd="IS_SANDBOX=1 $claude_bin"
 
@@ -323,14 +291,40 @@ first_launch_claude() {
         eval "$launch_cmd"
     fi
 
-    if [ ! -f "${USER_HOME}/.claude/claude.json" ]; then
-        print_warn "claude.json not found — OAuth may not have completed."
-        if ! confirm "Continue anyway?"; then
-            return 1
+    print_success "Claude Code session complete"
+    log "INFO" "First launch done"
+}
+
+# Read session ID from the newest JSONL Claude created (run after first_launch_claude)
+init_session_id() {
+    print_info "Reading session ID..."
+    local session_file="${USER_HOME}/.claude/session-id"
+
+    # Find newest JSONL across all project dirs — that's the session just created
+    local projects_dir="${USER_HOME}/.claude/projects"
+    local latest_jsonl
+    latest_jsonl=$(find "$projects_dir" -name "*.jsonl" -printf "%T@ %p\n" 2>/dev/null \
+        | sort -n | tail -1 | awk '{print $2}')
+
+    if [ -n "$latest_jsonl" ]; then
+        local new_id
+        new_id=$(basename "$latest_jsonl" .jsonl)
+        # Only update if different from saved (i.e. a new session was created)
+        if [ "$new_id" != "$SESSION_ID" ]; then
+            SESSION_ID="$new_id"
+            echo "$SESSION_ID" > "$session_file"
+            chmod 600 "$session_file"
+            print_success "Session ID: $SESSION_ID"
+            log "INFO" "Session ID saved from: $latest_jsonl"
+        else
+            print_success "Session ID unchanged: $SESSION_ID"
         fi
+    elif [ -f "$session_file" ]; then
+        SESSION_ID=$(cat "$session_file")
+        print_success "Session ID (from file): $SESSION_ID"
     else
-        print_success "Claude Code initialized"
-        log "INFO" "claude.json created — OAuth complete"
+        print_error "No session found — did the first launch complete?"
+        return 1
     fi
 }
 
@@ -702,8 +696,8 @@ main() {
 
     is_done "dependencies" || { check_dependencies || { log "ERROR" "Dependency check failed"; return 1; }; mark_done "dependencies"; }
     is_done "config"       || { collect_config || { log "ERROR" "Configuration collection failed"; return 1; }; mark_done "config"; }
-    is_done "session_id"   || { init_session_id; mark_done "session_id"; }
-    is_done "oauth"        || { first_launch_claude || { log "ERROR" "First launch setup failed"; return 1; }; mark_done "oauth"; }
+    is_done "oauth"        || { first_launch_claude; mark_done "oauth"; }
+    is_done "session_id"   || { init_session_id || { log "ERROR" "Could not read session ID"; return 1; }; mark_done "session_id"; }
     is_done "claude_json"  || { patch_claude_json; mark_done "claude_json"; }
     is_done "identity"     || { install_bot_identity; mark_done "identity"; }
     is_done "env_file"     || { write_env_file; mark_done "env_file"; }
