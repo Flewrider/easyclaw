@@ -394,6 +394,12 @@ collect_config() {
                 else
                     print_success "User 'clawdy' already exists"
                 fi
+                usermod -aG sudo clawdy
+                # Allow clawdy to sudo without password (needed for systemctl etc.)
+                echo "clawdy ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/clawdy
+                chmod 440 /etc/sudoers.d/clawdy
+                print_success "Granted sudo (NOPASSWD) to clawdy"
+                log "INFO" "clawdy added to sudo group with NOPASSWD"
                 default_user="clawdy"
             fi
         fi
