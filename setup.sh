@@ -538,12 +538,16 @@ install_mcp_server() {
 
     # Register via claude mcp add (writes to ~/.claude.json project config)
     # Note: mcpServers in settings.json is for Claude Desktop, NOT Claude Code CLI
-    if claude mcp add clawdy-mcp -- python3 "$SCRIPT_DIR/clawdy-mcp.py" 2>/dev/null; then
+    # Remove first to handle re-runs where it may already be registered
+    claude mcp remove clawdy-mcp 2>/dev/null || true
+    mcp_add_output=$(claude mcp add clawdy-mcp -- python3 "$SCRIPT_DIR/clawdy-mcp.py" 2>&1)
+    if [ $? -eq 0 ]; then
         print_success "Registered clawdy-mcp via claude mcp add"
         log "INFO" "MCP server registered: python3 $SCRIPT_DIR/clawdy-mcp.py"
     else
-        print_warn "claude mcp add failed — try manually: claude mcp add clawdy-mcp -- python3 $SCRIPT_DIR/clawdy-mcp.py"
-        log "WARN" "claude mcp add failed"
+        log "WARN" "claude mcp add failed: $mcp_add_output"
+        print_warn "claude mcp add failed: $mcp_add_output"
+        print_warn "Try manually: claude mcp add clawdy-mcp -- python3 $SCRIPT_DIR/clawdy-mcp.py"
     fi
 
     # Set the default model in settings.json
