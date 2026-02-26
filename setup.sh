@@ -525,15 +525,15 @@ install_mcp_server() {
     fi
 
     # Install required Python packages
-    # --break-system-packages needed on Ubuntu 22.04+ (PEP 668 externally managed env)
-    # Use python3 -m pip (works regardless of whether pip3 binary is in PATH)
+    # Use --user to install into ~/.local — avoids conflicts with system packages
+    # (--break-system-packages can fail when Debian-managed packages lack RECORD files)
     print_info "Installing Python dependencies (mcp, requests)..."
-    if python3 -m pip install --quiet --break-system-packages mcp requests 2>&1 | tee -a "$LOG_FILE"; then
+    if python3 -m pip install --quiet --user mcp requests 2>&1 | tee -a "$LOG_FILE"; then
         log "INFO" "Python packages installed: mcp, requests"
         print_success "Python packages installed"
     else
         print_warn "pip install failed — MCP server may not work"
-        log "WARN" "python3 -m pip install mcp requests failed"
+        log "WARN" "python3 -m pip install --user mcp requests failed"
     fi
 
     # Register via claude mcp add (writes to ~/.claude.json project config)
