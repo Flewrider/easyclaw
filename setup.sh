@@ -269,26 +269,37 @@ check_sudo_access() {
 
 # Step 2: Initialize session ID
 init_session_id() {
-    print_info "Initializing Claude Code session..."
-    log "DEBUG" "Session file location: ${USER_HOME}/.claude/session-id"
+    print_info "Reading session ID created by Claude Code..."
     local session_file="${USER_HOME}/.claude/session-id"
 
     if [ -f "$session_file" ]; then
         SESSION_ID=$(cat "$session_file")
         print_success "Reusing existing session ID: $SESSION_ID"
-        log "INFO" "Reusing session ID: $SESSION_ID (from $session_file)"
-    else
-        SESSION_ID=$(python3 -c "import uuid; print(str(uuid.uuid4()))")
-        log "DEBUG" "Generated new session ID: $SESSION_ID"
+        log "INFO" "Reusing session ID: $SESSION_ID"
+        return 0
+    fi
+
+    # Find the session ID from the most recently created JSONL file
+    # Claude stores sessions at ~/.claude/projects/<encoded-cwd>/<session-id>.jsonl
+    local projects_dir="${USER_HOME}/.claude/projects"
+    local latest_jsonl
+    latest_jsonl=$(find "$projects_dir" -name "*.jsonl" -printf "%T@ %p\n" 2>/dev/null \
+        | sort -n | tail -1 | awk '{print $2}')
+
+    if [ -n "$latest_jsonl" ]; then
+        SESSION_ID=$(basename "$latest_jsonl" .jsonl)
         mkdir -p "${USER_HOME}/.claude"
         echo "$SESSION_ID" > "$session_file"
         chmod 600 "$session_file"
-        print_success "Created new session ID: $SESSION_ID"
-        log "INFO" "Wrote session ID to $session_file"
+        print_success "Session ID: $SESSION_ID"
+        log "INFO" "Session ID read from: $latest_jsonl"
+    else
+        print_error "No session found in $projects_dir — did the first launch complete?"
+        return 1
     fi
 }
 
-# Step 3: First-launch Claude setup — OAuth + session init
+# Step 3: First-launch Claude setup — OAuth only, no extra flags
 first_launch_claude() {
     if [ -f "${USER_HOME}/.claude/claude.json" ]; then
         print_success "Claude Code already initialized"
@@ -298,14 +309,13 @@ first_launch_claude() {
     print_info "Starting Claude Code initial setup (OAuth login)..."
     echo
     echo -e "  ${YELLOW}A browser window will open for Claude OAuth login.${NC}"
-    echo    "  Complete the login, then Claude will initialize and exit automatically."
+    echo    "  Log in, then type 'exit' and press Enter to continue setup."
     echo
 
-    # Run directly in the terminal (NOT tmux) so the user can complete the OAuth flow.
-    # If SETUP_USER differs from current user (e.g. root running setup for clawdy),
-    # switch to that user so claude.json lands in the right home directory.
+    # Run plain claude — no session flags, no --dangerously-skip-permissions
+    # IS_SANDBOX=1 only needed if running as root
     local claude_bin="${USER_HOME}/.local/bin/claude"
-    local launch_cmd="IS_SANDBOX=1 $claude_bin --session-id $SESSION_ID --dangerously-skip-permissions --browser exit"
+    local launch_cmd="IS_SANDBOX=1 $claude_bin"
 
     if [ "$(whoami)" != "$SETUP_USER" ]; then
         su - "$SETUP_USER" -c "$launch_cmd"
@@ -314,7 +324,7 @@ first_launch_claude() {
     fi
 
     if [ ! -f "${USER_HOME}/.claude/claude.json" ]; then
-        print_warn "claude.json not found after setup — OAuth may not have completed."
+        print_warn "claude.json not found — OAuth may not have completed."
         if ! confirm "Continue anyway?"; then
             return 1
         fi
@@ -386,42 +396,13 @@ collect_config() {
 
     # Username
     if [ -z "$SETUP_USER" ]; then
-        local default_user="${USER:-ubuntu}"
-
-        # Warn if running as root — Claude Code blocks --dangerously-skip-permissions for root
-        if [ "$default_user" = "root" ]; then
-            echo
-            echo -e "${YELLOW}⚠ You are running as root.${NC}"
-            echo "  Claude Code blocks --dangerously-skip-permissions for root users."
-            echo "  It is strongly recommended to run the bot as a non-root user."
-            echo
-            if confirm "Create a dedicated 'clawdy' user and run the bot as that user?"; then
-                if ! id "clawdy" &>/dev/null; then
-                    useradd -m -s /bin/bash clawdy
-                    print_success "Created user: clawdy"
-                    log "INFO" "Created non-root user: clawdy"
-                else
-                    print_success "User 'clawdy' already exists"
-                fi
-                usermod -aG sudo clawdy
-                # Allow clawdy to sudo without password (needed for systemctl etc.)
-                echo "clawdy ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/clawdy
-                chmod 440 /etc/sudoers.d/clawdy
-                print_success "Granted sudo (NOPASSWD) to clawdy"
-                log "INFO" "clawdy added to sudo group with NOPASSWD"
-                default_user="clawdy"
-            fi
-        fi
+        local default_user="${USER:-root}"
 
         read -p "$(echo -e "${YELLOW}?${NC} System username (default: $default_user): ")" username
         username="${username:-$default_user}"
         if ! id "$username" &> /dev/null; then
             print_error "User $username does not exist"
             return 1
-        fi
-        if [ "$username" = "root" ]; then
-            print_warn "Running as root — Claude Code will block --dangerously-skip-permissions and the bot will not work."
-            confirm "Continue with root anyway?" || return 1
         fi
         SETUP_USER="$username"
         save_state
