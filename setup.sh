@@ -61,6 +61,7 @@ confirm() {
 # ── State persistence ─────────────────────────────────────────────────────────
 
 save_state() {
+    local status="${1:-}"
     cat > "$STATE_FILE" << EOF
 SETUP_USER="$SETUP_USER"
 CLAUDE_MODEL="$CLAUDE_MODEL"
@@ -69,6 +70,7 @@ SESSION_ID="$SESSION_ID"
 BOT_NAME="$BOT_NAME"
 BOT_PURPOSE="$BOT_PURPOSE"
 COMPLETED_STEPS=(${COMPLETED_STEPS[*]+"${COMPLETED_STEPS[*]}"})
+SETUP_STATUS="${status}"
 EOF
     log "DEBUG" "State saved to $STATE_FILE"
 }
@@ -95,6 +97,25 @@ is_done() {
 # Ask user to resume or restart if a previous state exists
 handle_resume() {
     [ ! -f "$STATE_FILE" ] && return 0
+
+    # Check if setup was previously completed
+    local setup_status
+    setup_status=$(grep "^SETUP_STATUS=" "$STATE_FILE" 2>/dev/null | cut -d= -f2 | tr -d '"' || echo "")
+
+    if [ "$setup_status" = "COMPLETE" ]; then
+        echo
+        echo -e "${GREEN}✓ EasyClaw is already installed.${NC}"
+        echo
+        if confirm "Reconfigure / reinstall? (n = exit)"; then
+            rm -f "$STATE_FILE"
+            print_info "Starting fresh..."
+            log "INFO" "User chose to reinstall"
+        else
+            print_info "Nothing to do. Exiting."
+            exit 0
+        fi
+        return 0
+    fi
 
     local done_list
     done_list=$(source "$STATE_FILE" 2>/dev/null && echo "${COMPLETED_STEPS[*]+"${COMPLETED_STEPS[*]}"}" || echo "")
@@ -687,8 +708,8 @@ main() {
     echo
     print_info "Starting services..."
     start_services
-    rm -f "$STATE_FILE"
-    log "INFO" "Setup complete — state file removed"
+    save_state "COMPLETE"
+    log "INFO" "Setup complete — state marked as COMPLETE"
 
     echo
     print_success "EasyClaw setup complete!"
