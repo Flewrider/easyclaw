@@ -41,6 +41,7 @@ TYPING_PID  = HOME / ".claude" / "memory" / "telegram-typing.pid"
 TYPING_LOOP = HOME / ".claude" / "memory" / "clawdy-typing-loop.py"
 ACTIVITY_LOG = HOME / ".claude" / "memory" / "activity-log.md"
 STATUS_FILE = HOME / ".claude" / "memory" / "status"
+TASKS_FILE  = HOME / ".claude" / "memory" / "tasks.md"
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -240,6 +241,122 @@ def impl_set_status(status: str) -> str:
     return f"Status set to: {status}"
 
 
+def _init_tasks_file() -> None:
+    """Create tasks.md with default structure if it doesn't exist."""
+    if not TASKS_FILE.exists():
+        TASKS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        TASKS_FILE.write_text(
+            "# Clawdy Task List\n"
+            "*Persistent task tracking — survives restarts*\n\n"
+            "## Pending\n\n"
+            "## In Progress\n\n"
+            "## Done (recent)\n"
+        )
+
+
+def impl_task_add(description: str, status: str = "pending") -> str:
+    _init_tasks_file()
+    today = datetime.now().strftime("%Y-%m-%d")
+    section_map = {
+        "pending":     ("## Pending",     "- [ ]"),
+        "in_progress": ("## In Progress", "- [~]"),
+    }
+    if status not in section_map:
+        return f"Invalid status '{status}'. Use 'pending' or 'in_progress'."
+    section_header, checkbox = section_map[status]
+    entry = f"{checkbox} [{today}] {description}\n"
+
+    lines = TASKS_FILE.read_text().splitlines(keepends=True)
+    insert_at = None
+    for i, line in enumerate(lines):
+        if line.strip() == section_header:
+            insert_at = i + 1
+            break
+    if insert_at is None:
+        return f"Section '{section_header}' not found in tasks.md."
+
+    lines.insert(insert_at, entry)
+    TASKS_FILE.write_text("".join(lines))
+    return f"Task added ({status}): {description}"
+
+
+def impl_task_list() -> str:
+    if not TASKS_FILE.exists():
+        return "No tasks file found."
+    lines = TASKS_FILE.read_text().splitlines()
+    tasks = []
+    current_section = ""
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("## "):
+            current_section = stripped[3:]
+        elif stripped.startswith("- ["):
+            tasks.append(f"[{current_section}] {stripped}")
+    if not tasks:
+        return "No tasks found."
+    return "\n".join(tasks)
+
+
+def impl_task_done(pattern: str) -> str:
+    """Mark the first task matching `pattern` as done (moves to Done section)."""
+    _init_tasks_file()
+    today = datetime.now().strftime("%Y-%m-%d")
+    lines = TASKS_FILE.read_text().splitlines(keepends=True)
+
+    # Find the matching task line (pending or in-progress)
+    match_idx = None
+    matched_line = ""
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if (stripped.startswith("- [ ]") or stripped.startswith("- [~]")) and pattern.lower() in stripped.lower():
+            match_idx = i
+            matched_line = stripped
+            break
+
+    if match_idx is None:
+        return f"No pending/in-progress task found matching: '{pattern}'"
+
+    # Extract description (strip checkbox + date prefix)
+    desc = matched_line
+    for prefix in ("- [ ] ", "- [~] "):
+        if desc.startswith(prefix):
+            desc = desc[len(prefix):]
+            break
+    done_entry = f"- [x] [{today}] {desc}\n"
+
+    # Remove the original line
+    lines.pop(match_idx)
+
+    # Find Done section and append there
+    for i, line in enumerate(lines):
+        if line.strip() == "## Done (recent)":
+            lines.insert(i + 1, done_entry)
+            break
+    else:
+        lines.append(f"\n## Done (recent)\n{done_entry}")
+
+    TASKS_FILE.write_text("".join(lines))
+    return f"Task marked done: {desc}"
+
+
+def impl_task_remove(pattern: str) -> str:
+    """Remove a task entirely (any status) matching `pattern`."""
+    _init_tasks_file()
+    lines = TASKS_FILE.read_text().splitlines(keepends=True)
+    new_lines = []
+    removed = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("- [") and pattern.lower() in stripped.lower():
+            removed.append(stripped)
+        else:
+            new_lines.append(line)
+    if not removed:
+        return f"No task found matching: '{pattern}'"
+    TASKS_FILE.write_text("".join(new_lines))
+    return f"Removed {len(removed)} task(s):\n" + "\n".join(removed)
+
+
 # ── MCP Server ────────────────────────────────────────────────────────────────
 
 server = Server("clawdy-mcp")
@@ -353,6 +470,50 @@ async def list_tools() -> list[types.Tool]:
                 "required": ["status"],
             },
         ),
+        types.Tool(
+            name="task_add",
+            description="Add a task to the persistent task list (read by cron every 30 min).",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "description": {"type": "string", "description": "Task description"},
+                    "status": {
+                        "type": "string",
+                        "enum": ["pending", "in_progress"],
+                        "description": "Initial status (default: pending)",
+                        "default": "pending",
+                    },
+                },
+                "required": ["description"],
+            },
+        ),
+        types.Tool(
+            name="task_list",
+            description="List all tasks in the task list (all statuses).",
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        types.Tool(
+            name="task_done",
+            description="Mark a task as done. Matches by partial description text.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "pattern": {"type": "string", "description": "Partial text to match the task"},
+                },
+                "required": ["pattern"],
+            },
+        ),
+        types.Tool(
+            name="task_remove",
+            description="Remove a task entirely from the list. Matches by partial description text.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "pattern": {"type": "string", "description": "Partial text to match the task"},
+                },
+                "required": ["pattern"],
+            },
+        ),
     ]
 
 
@@ -377,6 +538,14 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextCont
             result = impl_activity_log(arguments["category"], arguments["description"])
         elif name == "set_status":
             result = impl_set_status(arguments["status"])
+        elif name == "task_add":
+            result = impl_task_add(arguments["description"], arguments.get("status", "pending"))
+        elif name == "task_list":
+            result = impl_task_list()
+        elif name == "task_done":
+            result = impl_task_done(arguments["pattern"])
+        elif name == "task_remove":
+            result = impl_task_remove(arguments["pattern"])
         else:
             result = f"Unknown tool: {name}"
     except Exception as e:
