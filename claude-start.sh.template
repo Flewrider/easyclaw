@@ -24,14 +24,20 @@ tmux new-session -d -s "$SESSION" -c "$WORKDIR" -n "claude" \
   "while true; do $CLAUDE --dangerously-skip-permissions --continue || $CLAUDE --dangerously-skip-permissions; echo '[claude exited — restarting in 3s...]'; sleep 3; done"
 
 # Wait for Claude to finish loading (MCP servers take time to init)
-sleep 12
+sleep 15
 
-# Inject startup commands
-tmux send-keys -t "$SESSION:claude" "/rename %%BOT_NAME%%" Enter
-sleep 3
-tmux send-keys -t "$SESSION:claude" "/remote-control" Enter
-sleep 6
-tmux send-keys -t "$SESSION:claude" "[restart] Continue from where you left off." Enter
+# Inject startup commands — send text and Enter separately to avoid multiline paste mode
+tmux send-keys -t "$SESSION:claude" "/rename %%BOT_NAME%%"
+sleep 2
+tmux send-keys -t "$SESSION:claude" "" C-m
+sleep 5
+tmux send-keys -t "$SESSION:claude" "/remote-control"
+sleep 2
+tmux send-keys -t "$SESSION:claude" "" C-m
+sleep 8
+tmux send-keys -t "$SESSION:claude" "[restart] Continue from where you left off."
+sleep 1
+tmux send-keys -t "$SESSION:claude" "" C-m
 
 # Block until tmux session ends so systemd can track and restart
 while tmux has-session -t "$SESSION" 2>/dev/null; do
