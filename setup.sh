@@ -86,7 +86,10 @@ check_dependencies() {
         if curl -fsSL https://claude.ai/install.sh | bash; then
             print_success "Claude Code CLI installed"
             log "INFO" "Claude Code CLI installed successfully"
-            # Reload PATH in case installer added to ~/.local/bin or similar
+            # Add ~/.local/bin to PATH permanently and reload for this session
+            if ! grep -q 'local/bin' ~/.bashrc; then
+                echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+            fi
             export PATH="$HOME/.local/bin:$PATH"
         else
             missing+=("claude (Claude Code CLI) — install failed, retry manually: curl -fsSL https://claude.ai/install.sh | bash")
