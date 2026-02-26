@@ -13,6 +13,7 @@ NC='\033[0m' # No Color
 
 # Global config (declared early so accessible in all functions)
 SETUP_USER=""
+USER_HOME=""
 CLAUDE_MODEL=""
 TELEGRAM_TOKEN=""
 SESSION_ID=""
@@ -269,8 +270,8 @@ check_sudo_access() {
 # Step 2: Initialize session ID
 init_session_id() {
     print_info "Initializing Claude Code session..."
-    log "DEBUG" "Session file location: $HOME/.claude/session-id"
-    local session_file="$HOME/.claude/session-id"
+    log "DEBUG" "Session file location: ${USER_HOME}/.claude/session-id"
+    local session_file="${USER_HOME}/.claude/session-id"
 
     if [ -f "$session_file" ]; then
         SESSION_ID=$(cat "$session_file")
@@ -279,7 +280,7 @@ init_session_id() {
     else
         SESSION_ID=$(python3 -c "import uuid; print(str(uuid.uuid4()))")
         log "DEBUG" "Generated new session ID: $SESSION_ID"
-        mkdir -p "$HOME/.claude"
+        mkdir -p "${USER_HOME}/.claude"
         echo "$SESSION_ID" > "$session_file"
         chmod 600 "$session_file"
         print_success "Created new session ID: $SESSION_ID"
@@ -289,7 +290,7 @@ init_session_id() {
 
 # Step 3: First-launch Claude setup — OAuth + session init
 first_launch_claude() {
-    if [ -f "$HOME/.claude/claude.json" ]; then
+    if [ -f "${USER_HOME}/.claude/claude.json" ]; then
         print_success "Claude Code already initialized"
         return 0
     fi
@@ -303,7 +304,7 @@ first_launch_claude() {
     # Run directly — passes 'exit' as the first prompt so Claude exits after OAuth completes
     claude --session-id "$SESSION_ID" --dangerously-skip-permissions --browser exit
 
-    if [ ! -f "$HOME/.claude/claude.json" ]; then
+    if [ ! -f "${USER_HOME}/.claude/claude.json" ]; then
         print_warn "claude.json not found after setup — OAuth may not have completed."
         if ! confirm "Continue anyway?"; then
             return 1
@@ -317,7 +318,7 @@ first_launch_claude() {
 # Step 4: Patch claude.json to trust home directory (workaround for Claude Code bug)
 patch_claude_json() {
     print_info "Configuring Claude Code settings..."
-    local claude_json="$HOME/.claude/claude.json"
+    local claude_json="${USER_HOME}/.claude/claude.json"
 
     if [ ! -f "$claude_json" ]; then
         print_warn "claude.json not found, creating minimal config"
@@ -339,7 +340,7 @@ patch_claude_json() {
 # Step 5: Install CLAUDE.md — full operational instructions for the agent
 install_bot_identity() {
     local src="$SCRIPT_DIR/bot-identity.md"
-    local dest_claude_md="$HOME/CLAUDE.md"
+    local dest_claude_md="${USER_HOME}/CLAUDE.md"
 
     if [ ! -f "$src" ]; then
         print_warn "bot-identity.md not found in $SCRIPT_DIR — skipping CLAUDE.md setup"
@@ -377,17 +378,45 @@ collect_config() {
     # Username
     if [ -z "$SETUP_USER" ]; then
         local default_user="${USER:-ubuntu}"
+
+        # Warn if running as root — Claude Code blocks --dangerously-skip-permissions for root
+        if [ "$default_user" = "root" ]; then
+            echo
+            echo -e "${YELLOW}⚠ You are running as root.${NC}"
+            echo "  Claude Code blocks --dangerously-skip-permissions for root users."
+            echo "  It is strongly recommended to run the bot as a non-root user."
+            echo
+            if confirm "Create a dedicated 'clawdy' user and run the bot as that user?"; then
+                if ! id "clawdy" &>/dev/null; then
+                    useradd -m -s /bin/bash clawdy
+                    print_success "Created user: clawdy"
+                    log "INFO" "Created non-root user: clawdy"
+                else
+                    print_success "User 'clawdy' already exists"
+                fi
+                default_user="clawdy"
+            fi
+        fi
+
         read -p "$(echo -e "${YELLOW}?${NC} System username (default: $default_user): ")" username
         username="${username:-$default_user}"
         if ! id "$username" &> /dev/null; then
             print_error "User $username does not exist"
             return 1
         fi
+        if [ "$username" = "root" ]; then
+            print_warn "Running as root — Claude Code will block --dangerously-skip-permissions and the bot will not work."
+            confirm "Continue with root anyway?" || return 1
+        fi
         SETUP_USER="$username"
         save_state
     else
         print_success "System username: $SETUP_USER (saved)"
     fi
+
+    # Set USER_HOME to the target user's home (may differ from $HOME when run as root)
+    USER_HOME=$(eval echo "~$SETUP_USER")
+    log "INFO" "USER_HOME set to: $USER_HOME"
 
     # Telegram token
     if [ -z "$TELEGRAM_TOKEN" ]; then
@@ -526,8 +555,8 @@ install_mcp_server() {
     fi
 
     # Set the default model in settings.json
-    local settings="$HOME/.claude/settings.json"
-    mkdir -p "$HOME/.claude"
+    local settings="${USER_HOME}/.claude/settings.json"
+    mkdir -p "${USER_HOME}/.claude"
     if [ -f "$settings" ] && command -v jq &>/dev/null; then
         jq --arg model "$CLAUDE_MODEL" '.model = $model' \
            "$settings" > "$settings.tmp" && mv "$settings.tmp" "$settings"
@@ -540,7 +569,7 @@ install_start_script() {
     print_info "Installing claude-start.sh..."
 
     local template="$SCRIPT_DIR/claude-start.sh.template"
-    local dest="$HOME/claude-start.sh"
+    local dest="${USER_HOME}/claude-start.sh"
 
     if [ ! -f "$template" ]; then
         print_error "claude-start.sh.template not found in $SCRIPT_DIR"
@@ -548,7 +577,7 @@ install_start_script() {
     fi
 
     sed \
-        -e "s|%%HOME%%|$HOME|g" \
+        -e "s|%%HOME%%|$USER_HOME|g" \
         -e "s|%%SESSION_ID%%|$SESSION_ID|g" \
         -e "s|%%BOT_NAME%%|$BOT_NAME|g" \
         "$template" > "$dest"
@@ -671,6 +700,9 @@ main() {
     [ "$VERBOSE" = "1" ] && echo "📝 Logging to: $LOG_FILE" && echo
 
     handle_resume
+
+    # Restore USER_HOME after resume (SETUP_USER loaded from state)
+    [ -n "$SETUP_USER" ] && USER_HOME=$(eval echo "~$SETUP_USER") || USER_HOME="$HOME"
 
     is_done "dependencies" || { check_dependencies || { log "ERROR" "Dependency check failed"; return 1; }; mark_done "dependencies"; }
     is_done "session_id"   || { init_session_id; mark_done "session_id"; }
