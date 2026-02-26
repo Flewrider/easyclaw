@@ -197,22 +197,30 @@ def impl_telegram_send(message: str, end_typing: bool = False) -> str:
     if end_typing:
         stop_typing()
 
-    # Try Markdown, fallback to plain
-    for parse_mode in ["Markdown", None]:
-        payload: dict[str, Any] = {"chat_id": chat_id, "text": message}
-        if parse_mode:
-            payload["parse_mode"] = parse_mode
-        try:
-            r = requests.post(
-                f"https://api.telegram.org/bot{token}/sendMessage",
-                json=payload, timeout=15,
-            )
-            result = r.json()
-            if result.get("ok"):
-                return f"Sent ({len(message)} chars). Typing indicator: {'stopped' if end_typing else 'still running'}."
-        except Exception as e:
-            return f"Request failed: {e}"
-    return f"Failed to send: {result}"
+    MAX_LEN = 4096
+    chunks = [message[i:i+MAX_LEN] for i in range(0, len(message), MAX_LEN)]
+    result = {}
+    for chunk in chunks:
+        # Try Markdown, fallback to plain
+        for parse_mode in ["Markdown", None]:
+            payload: dict[str, Any] = {"chat_id": chat_id, "text": chunk}
+            if parse_mode:
+                payload["parse_mode"] = parse_mode
+            try:
+                r = requests.post(
+                    f"https://api.telegram.org/bot{token}/sendMessage",
+                    json=payload, timeout=15,
+                )
+                result = r.json()
+                if result.get("ok"):
+                    break
+            except Exception as e:
+                return f"Request failed: {e}"
+        else:
+            return f"Failed to send chunk: {result}"
+
+    sent_info = f"{len(message)} chars" if len(chunks) == 1 else f"{len(message)} chars in {len(chunks)} parts"
+    return f"Sent ({sent_info}). Typing indicator: {'stopped' if end_typing else 'still running'}."
 
 
 def impl_activity_log(category: str, description: str) -> str:
