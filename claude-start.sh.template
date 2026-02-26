@@ -1,0 +1,34 @@
+#!/bin/bash
+# claude-start.sh — starts a persistent tmux-wrapped Claude Code session.
+# Accessible via: tmux attach -t claude
+# Managed by systemd (claude-code.service)
+
+SESSION="claude"
+WORKDIR="%%HOME%%"
+CLAUDE="claude"
+SESSION_ID="%%SESSION_ID%%"
+
+# Reset status to idle on every restart
+echo "idle" > "%%HOME%%/.claude/memory/status"
+
+# Kill any stale tmux session
+tmux kill-session -t "$SESSION" 2>/dev/null
+
+# Start Claude Code inside tmux (restarts automatically if it crashes)
+tmux new-session -d -s "$SESSION" -c "$WORKDIR" -n "claude" \
+  "while true; do $CLAUDE --dangerously-skip-permissions --resume $SESSION_ID; echo '[claude exited — restarting in 3s...]'; sleep 3; done"
+
+# Wait for Claude to finish loading (MCP servers take time to init)
+sleep 12
+
+# Inject startup commands
+tmux send-keys -t "$SESSION:claude" "/rename %%BOT_NAME%%" Enter
+sleep 3
+tmux send-keys -t "$SESSION:claude" "/remote-control" Enter
+sleep 6
+tmux send-keys -t "$SESSION:claude" "[restart] Continue from where you left off." Enter
+
+# Block until tmux session ends so systemd can track and restart
+while tmux has-session -t "$SESSION" 2>/dev/null; do
+  sleep 2
+done

@@ -1,0 +1,22 @@
+[Unit]
+Description=Claude Code Personal AI Assistant
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=%%USER%%
+WorkingDirectory=%%HOME%%
+ExecStart=%%HOME%%/claude-start.sh
+Restart=always
+RestartSec=5s
+StartLimitBurst=5
+StartLimitIntervalSec=60
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=full
+ReadWritePaths=%%HOME%%/.claude %%HOME%%/claude-start.sh
+
+[Install]
+WantedBy=multi-user.target

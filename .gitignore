@@ -1,0 +1,23 @@
+# Secrets
+.env
+.env.local
+*.key
+*.pem
+
+# Logs
+*.log
+logs/
+
+# Generated files
+__pycache__/
+*.pyc
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Runtime
+session-id
