@@ -720,10 +720,10 @@ main() {
     [ -n "$SETUP_USER" ] && USER_HOME=$(eval echo "~$SETUP_USER") || USER_HOME="$HOME"
 
     is_done "dependencies" || { check_dependencies || { log "ERROR" "Dependency check failed"; return 1; }; mark_done "dependencies"; }
+    is_done "config"       || { collect_config || { log "ERROR" "Configuration collection failed"; return 1; }; mark_done "config"; }
     is_done "session_id"   || { init_session_id; mark_done "session_id"; }
     is_done "oauth"        || { first_launch_claude || { log "ERROR" "First launch setup failed"; return 1; }; mark_done "oauth"; }
     is_done "claude_json"  || { patch_claude_json; mark_done "claude_json"; }
-    is_done "config"       || { collect_config || { log "ERROR" "Configuration collection failed"; return 1; }; mark_done "config"; }
     is_done "identity"     || { install_bot_identity; mark_done "identity"; }
     is_done "env_file"     || { write_env_file; mark_done "env_file"; }
     is_done "mcp_server"   || { install_mcp_server; mark_done "mcp_server"; }
