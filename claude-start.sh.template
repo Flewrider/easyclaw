@@ -9,6 +9,7 @@ CLAUDE="claude"
 SESSION_ID="%%SESSION_ID%%"
 
 # Reset status to idle on every restart
+mkdir -p "%%HOME%%/.claude/memory"
 echo "idle" > "%%HOME%%/.claude/memory/status"
 
 # Kill any stale tmux session
