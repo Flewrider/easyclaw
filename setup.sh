@@ -97,8 +97,11 @@ check_dependencies() {
         fi
     fi
 
+    # Ensure ~/.local/bin is in PATH before checking (installer puts claude there)
+    export PATH="$HOME/.local/bin:$PATH"
+
     # Check Claude CLI — install automatically if missing
-    if ! command -v claude &> /dev/null; then
+    if ! command -v claude &> /dev/null && [ ! -f "$HOME/.local/bin/claude" ]; then
         print_info "Claude Code CLI not found — installing..."
         log "INFO" "Installing Claude Code CLI via official installer"
         if curl -fsSL https://claude.ai/install.sh | bash; then
