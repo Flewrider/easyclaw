@@ -704,6 +704,15 @@ main() {
 
     is_done "dependencies" || { check_dependencies || { log "ERROR" "Dependency check failed"; return 1; }; mark_done "dependencies"; }
     is_done "config"       || { collect_config || { log "ERROR" "Configuration collection failed"; return 1; }; mark_done "config"; }
+
+    # Stop any running claude session before OAuth — otherwise the login browser
+    # opens inside tmux instead of in this terminal
+    if ! is_done "oauth"; then
+        systemctl stop claude-code.service 2>/dev/null || true
+        tmux kill-session -t claude 2>/dev/null || true
+        sleep 1
+    fi
+
     is_done "oauth"        || { first_launch_claude; mark_done "oauth"; }
     is_done "claude_json"  || { patch_claude_json; mark_done "claude_json"; }
     is_done "identity"     || { install_bot_identity; mark_done "identity"; }
