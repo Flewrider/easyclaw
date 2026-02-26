@@ -503,7 +503,6 @@ write_env_file() {
 
     set_env_var "SETUP_USER"           "$SETUP_USER"
     set_env_var "EASYCLAW_DIR"         "$SCRIPT_DIR"
-    set_env_var "SESSION_ID"           "$SESSION_ID"
     set_env_var "CLAUDE_DEFAULT_MODEL" "$CLAUDE_MODEL"
     set_env_var "BOT_NAME"             "${BOT_NAME:-Clawdy}"
     set_env_var "BOT_PURPOSE"          "${BOT_PURPOSE:-your personal AI assistant}"
@@ -610,7 +609,6 @@ install_services() {
             -e "s|%%USER%%|$SETUP_USER|g" \
             -e "s|%%HOME%%|$(eval echo ~$SETUP_USER)|g" \
             -e "s|%%EASYCLAW_DIR%%|$SCRIPT_DIR|g" \
-            -e "s|%%SESSION_ID%%|$SESSION_ID|g" \
             -e "s|%%CLAUDE_MODEL%%|$CLAUDE_MODEL|g" \
             "$service_file" > "$temp_service"
 
@@ -707,7 +705,6 @@ main() {
     is_done "dependencies" || { check_dependencies || { log "ERROR" "Dependency check failed"; return 1; }; mark_done "dependencies"; }
     is_done "config"       || { collect_config || { log "ERROR" "Configuration collection failed"; return 1; }; mark_done "config"; }
     is_done "oauth"        || { first_launch_claude; mark_done "oauth"; }
-    is_done "session_id"   || { init_session_id || { log "ERROR" "Could not read session ID"; return 1; }; mark_done "session_id"; }
     is_done "claude_json"  || { patch_claude_json; mark_done "claude_json"; }
     is_done "identity"     || { install_bot_identity; mark_done "identity"; }
     is_done "env_file"     || { write_env_file; mark_done "env_file"; }
