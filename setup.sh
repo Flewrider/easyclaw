@@ -191,7 +191,7 @@ init_session_id() {
         print_success "Reusing existing session ID: $SESSION_ID"
         log "INFO" "Reusing session ID: $SESSION_ID (from $session_file)"
     else
-        SESSION_ID=$(python3 -c "import secrets; print(secrets.token_hex(16))")
+        SESSION_ID=$(python3 -c "import uuid; print(str(uuid.uuid4()))")
         log "DEBUG" "Generated new session ID: $SESSION_ID"
         mkdir -p "$HOME/.claude"
         echo "$SESSION_ID" > "$session_file"
@@ -201,35 +201,30 @@ init_session_id() {
     fi
 }
 
-# Step 3: First-launch Claude setup (manual step)
+# Step 3: First-launch Claude setup — OAuth + session init
 first_launch_claude() {
     if [ -f "$HOME/.claude/claude.json" ]; then
         print_success "Claude Code already initialized"
         return 0
     fi
 
-    print_warn "Claude Code needs initial setup. You'll run a command in another terminal."
+    print_info "Starting Claude Code initial setup (OAuth login)..."
     echo
-    echo "  Copy and run this command in a NEW terminal:"
-    echo
-    echo "    ${YELLOW}echo 'exit' | claude --session-id $SESSION_ID --dangerously-skip-permissions --browser${NC}"
-    echo
-    echo "  This opens the Claude OAuth setup in your browser. After completing login:"
-    echo "  - Claude will finish initializing and write ~/.claude/claude.json"
-    echo "  - The 'exit' command automatically closes the session when OAuth completes"
-    echo "  - Return here and press y to continue"
+    echo -e "  ${YELLOW}A browser window will open for Claude OAuth login.${NC}"
+    echo    "  Complete the login, then Claude will initialize and exit automatically."
     echo
 
-    if ! confirm "Ready to continue (after you've run the above command)?"; then
-        print_warn "Skipping Claude setup. You can run it manually later."
-        return 0
-    fi
+    # Run directly — passes 'exit' as the first prompt so Claude exits after OAuth completes
+    claude --session-id "$SESSION_ID" --dangerously-skip-permissions --browser exit
 
     if [ ! -f "$HOME/.claude/claude.json" ]; then
-        print_warn "claude.json not found. If setup failed, check the logs and try again."
+        print_warn "claude.json not found after setup — OAuth may not have completed."
         if ! confirm "Continue anyway?"; then
             return 1
         fi
+    else
+        print_success "Claude Code initialized"
+        log "INFO" "claude.json created — OAuth complete"
     fi
 }
 
