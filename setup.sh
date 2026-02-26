@@ -69,15 +69,33 @@ check_dependencies() {
         "tmux:tmux"
     )
 
+    local apt_missing=()
     for check in "${checks[@]}"; do
-        IFS=: read -r cmd name <<< "$check"
+        IFS=: read -r cmd pkg <<< "$check"
         if ! command -v "$cmd" &> /dev/null; then
-            missing+=("$name")
-            log "WARN" "Missing: $name"
+            apt_missing+=("$pkg")
+            log "WARN" "Missing: $pkg"
         else
-            log "DEBUG" "Found: $name"
+            log "DEBUG" "Found: $cmd"
         fi
     done
+
+    # Auto-install missing apt packages
+    if [ ${#apt_missing[@]} -gt 0 ]; then
+        print_info "Auto-installing missing packages: ${apt_missing[*]}"
+        log "INFO" "Auto-installing: ${apt_missing[*]}"
+        local install_cmd="apt-get install -y"
+        [ "$(id -u)" != "0" ] && install_cmd="sudo apt-get install -y"
+        apt-get update -qq 2>/dev/null || true
+        if $install_cmd "${apt_missing[@]}" 2>&1 | tee -a "$LOG_FILE"; then
+            print_success "Packages installed: ${apt_missing[*]}"
+            log "INFO" "Packages installed successfully"
+        else
+            for pkg in "${apt_missing[@]}"; do
+                missing+=("$pkg")
+            done
+        fi
+    fi
 
     # Check Claude CLI — install automatically if missing
     if ! command -v claude &> /dev/null; then
@@ -110,12 +128,11 @@ check_dependencies() {
     fi
 
     if [ ${#missing[@]} -gt 0 ]; then
-        print_error "Missing dependencies:"
+        print_error "Could not install required dependencies:"
         for item in "${missing[@]}"; do
             echo "  - $item"
             log "ERROR" "Missing dependency: $item"
         done
-        print_warn "Install with: sudo apt install curl jq git python3 tmux"
         return 1
     fi
 
