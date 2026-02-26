@@ -10,7 +10,6 @@ SESSION="claude"
 WORKDIR="%%HOME%%"
 CLAUDE="%%HOME%%/.local/bin/claude"
 export IS_SANDBOX=1
-SESSION_ID="%%SESSION_ID%%"
 
 # Reset status to idle on every restart
 mkdir -p "%%HOME%%/.claude/memory"
@@ -20,8 +19,9 @@ echo "idle" > "%%HOME%%/.claude/memory/status"
 tmux kill-session -t "$SESSION" 2>/dev/null
 
 # Start Claude Code inside tmux (restarts automatically if it crashes)
+# --continue resumes the latest session for WORKDIR; starts fresh if none exists
 tmux new-session -d -s "$SESSION" -c "$WORKDIR" -n "claude" \
-  "while true; do $CLAUDE --dangerously-skip-permissions --resume $SESSION_ID; echo '[claude exited — restarting in 3s...]'; sleep 3; done"
+  "while true; do $CLAUDE --dangerously-skip-permissions --continue; echo '[claude exited — restarting in 3s...]'; sleep 3; done"
 
 # Wait for Claude to finish loading (MCP servers take time to init)
 sleep 12

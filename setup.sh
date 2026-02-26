@@ -553,11 +553,15 @@ install_mcp_server() {
     # Set the default model in settings.json
     local settings="${USER_HOME}/.claude/settings.json"
     mkdir -p "${USER_HOME}/.claude"
-    if [ -f "$settings" ] && command -v jq &>/dev/null; then
-        jq --arg model "$CLAUDE_MODEL" '.model = $model' \
-           "$settings" > "$settings.tmp" && mv "$settings.tmp" "$settings"
-        log "INFO" "Set model to $CLAUDE_MODEL in settings.json"
-    fi
+    # Create settings.json if missing
+    [ -f "$settings" ] || echo '{}' > "$settings"
+    jq --arg model "$CLAUDE_MODEL" '
+      .model = $model |
+      .dangerouslySkipPermissions = true |
+      .skipDangerousModePermissionPrompt = true
+    ' "$settings" > "$settings.tmp" && mv "$settings.tmp" "$settings"
+    log "INFO" "Set model=$CLAUDE_MODEL and dangerouslySkipPermissions in settings.json"
+    print_success "Claude Code settings configured"
 }
 
 # Step 7: Install claude-start.sh wrapper script
@@ -574,7 +578,6 @@ install_start_script() {
 
     sed \
         -e "s|%%HOME%%|$USER_HOME|g" \
-        -e "s|%%SESSION_ID%%|$SESSION_ID|g" \
         -e "s|%%BOT_NAME%%|$BOT_NAME|g" \
         "$template" > "$dest"
 
