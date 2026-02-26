@@ -284,7 +284,8 @@ first_launch_claude() {
     echo
 
     local claude_bin="${USER_HOME}/.local/bin/claude"
-    local launch_cmd="IS_SANDBOX=1 $claude_bin"
+    # Run from USER_HOME so the session is created in the right project directory
+    local launch_cmd="cd $USER_HOME && IS_SANDBOX=1 $claude_bin"
 
     if [ "$(whoami)" != "$SETUP_USER" ]; then
         su - "$SETUP_USER" -c "$launch_cmd"
