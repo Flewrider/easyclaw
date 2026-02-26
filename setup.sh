@@ -524,25 +524,36 @@ install_mcp_server() {
         return 0
     fi
 
-    # Install required Python packages
-    # Use --user to install into ~/.local — avoids conflicts with system packages
-    # (--break-system-packages can fail when Debian-managed packages lack RECORD files)
-    print_info "Installing Python dependencies (mcp, requests)..."
-    if python3 -m pip install --quiet --user mcp requests 2>&1 | tee -a "$LOG_FILE"; then
+    # Create a venv for the MCP server — avoids all PEP 668 externally-managed-env issues
+    local venv_dir="$SCRIPT_DIR/venv"
+    print_info "Creating Python venv at $venv_dir..."
+    if python3 -m venv "$venv_dir" 2>&1 | tee -a "$LOG_FILE"; then
+        log "INFO" "Venv created: $venv_dir"
+    else
+        print_warn "Failed to create venv — install python3-venv? Trying apt..."
+        apt-get install -y python3-venv 2>&1 | tee -a "$LOG_FILE" || true
+        python3 -m venv "$venv_dir" 2>&1 | tee -a "$LOG_FILE" || {
+            print_warn "Venv creation failed — MCP server may not work"
+        }
+    fi
+
+    local venv_python="$venv_dir/bin/python3"
+    print_info "Installing Python dependencies (mcp, requests) into venv..."
+    if "$venv_python" -m pip install --quiet mcp requests 2>&1 | tee -a "$LOG_FILE"; then
         log "INFO" "Python packages installed: mcp, requests"
         print_success "Python packages installed"
     else
         print_warn "pip install failed — MCP server may not work"
-        log "WARN" "python3 -m pip install --user mcp requests failed"
+        log "WARN" "venv pip install mcp requests failed"
     fi
 
-    # Register via claude mcp add (writes to ~/.claude.json project config)
+    # Register via claude mcp add using the venv python
     # Note: mcpServers in settings.json is for Claude Desktop, NOT Claude Code CLI
-    if claude mcp add clawdy-mcp -- python3 "$SCRIPT_DIR/clawdy-mcp.py" 2>/dev/null; then
+    if claude mcp add clawdy-mcp -- "$venv_python" "$SCRIPT_DIR/clawdy-mcp.py" 2>/dev/null; then
         print_success "Registered clawdy-mcp via claude mcp add"
-        log "INFO" "MCP server registered: python3 $SCRIPT_DIR/clawdy-mcp.py"
+        log "INFO" "MCP server registered: $venv_python $SCRIPT_DIR/clawdy-mcp.py"
     else
-        print_warn "claude mcp add failed — try manually: claude mcp add clawdy-mcp -- python3 $SCRIPT_DIR/clawdy-mcp.py"
+        print_warn "claude mcp add failed — try manually: claude mcp add clawdy-mcp -- $venv_python $SCRIPT_DIR/clawdy-mcp.py"
         log "WARN" "claude mcp add failed"
     fi
 
