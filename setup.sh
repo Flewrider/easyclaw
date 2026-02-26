@@ -329,26 +329,27 @@ init_session_id() {
     fi
 }
 
-# Step 4: Patch claude.json to trust home directory (workaround for Claude Code bug)
+# Step 4: Trust home directory in ~/.claude.json
+# Trust dialog state lives in ~/.claude.json under projects["<path>"]["hasTrustDialogAccepted"]
 patch_claude_json() {
     print_info "Configuring Claude Code settings..."
-    local claude_json="${USER_HOME}/.claude/claude.json"
+    local claude_json="${USER_HOME}/.claude.json"
 
     if [ ! -f "$claude_json" ]; then
-        print_warn "claude.json not found, creating minimal config"
+        print_warn "~/.claude.json not found — creating minimal config"
         echo '{}' > "$claude_json"
     fi
 
-    # Check if trusted_paths already exists and contains our home
-    if jq -e ".trusted_paths | index(\"$HOME\")" "$claude_json" &> /dev/null; then
+    # Check if already trusted
+    if jq -e ".projects[\"$USER_HOME\"].hasTrustDialogAccepted == true" "$claude_json" &>/dev/null; then
         print_success "Home directory already trusted in Claude Code"
         return 0
     fi
 
-    # Add home to trusted_paths
-    jq ".trusted_paths |= . + [\"$HOME\"]" "$claude_json" > "$claude_json.tmp"
+    # Set hasTrustDialogAccepted for the home directory project
+    jq ".projects[\"$USER_HOME\"].hasTrustDialogAccepted = true" "$claude_json" > "$claude_json.tmp"
     mv "$claude_json.tmp" "$claude_json"
-    print_success "Added home directory to trusted paths"
+    print_success "Home directory trusted in Claude Code"
 }
 
 # Step 5: Install CLAUDE.md — full operational instructions for the agent
@@ -536,19 +537,18 @@ install_mcp_server() {
         log "WARN" "pip install mcp requests failed"
     fi
 
-    # Register via claude mcp add (writes to ~/.claude.json project config)
-    # Note: mcpServers in settings.json is for Claude Desktop, NOT Claude Code CLI
-    # Remove first to handle re-runs where it may already be registered
-    claude mcp remove clawdy-mcp 2>/dev/null || true
-    mcp_add_output=$(claude mcp add clawdy-mcp -- python3 "$SCRIPT_DIR/clawdy-mcp.py" 2>&1)
-    if [ $? -eq 0 ]; then
-        print_success "Registered clawdy-mcp via claude mcp add"
-        log "INFO" "MCP server registered: python3 $SCRIPT_DIR/clawdy-mcp.py"
-    else
-        log "WARN" "claude mcp add failed: $mcp_add_output"
-        print_warn "claude mcp add failed: $mcp_add_output"
-        print_warn "Try manually: claude mcp add clawdy-mcp -- python3 $SCRIPT_DIR/clawdy-mcp.py"
-    fi
+    # Register MCP server by patching ~/.claude.json directly
+    # (claude mcp add writes to the cwd project, which may not be USER_HOME)
+    local claude_json="${USER_HOME}/.claude.json"
+    [ -f "$claude_json" ] || echo '{}' > "$claude_json"
+    jq ".projects[\"$USER_HOME\"].mcpServers[\"clawdy-mcp\"] = {
+          \"type\": \"stdio\",
+          \"command\": \"python3\",
+          \"args\": [\"$SCRIPT_DIR/clawdy-mcp.py\"],
+          \"env\": {}
+        }" "$claude_json" > "$claude_json.tmp" && mv "$claude_json.tmp" "$claude_json"
+    print_success "Registered clawdy-mcp in ~/.claude.json for $USER_HOME"
+    log "INFO" "MCP server registered in ~/.claude.json: python3 $SCRIPT_DIR/clawdy-mcp.py"
 
     # Set the default model in settings.json
     local settings="${USER_HOME}/.claude/settings.json"
