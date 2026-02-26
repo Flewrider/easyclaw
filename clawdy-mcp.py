@@ -220,6 +220,14 @@ def impl_telegram_send(message: str, end_typing: bool = False) -> str:
         else:
             return f"Failed to send chunk: {result}"
 
+    # Clear trigger context after final message — signals end of this Telegram session
+    if end_typing:
+        try:
+            RESTART_CONTEXT = HOME / ".claude" / "restart-context"
+            RESTART_CONTEXT.unlink(missing_ok=True)
+        except Exception:
+            pass
+
     sent_info = f"{len(message)} chars" if len(chunks) == 1 else f"{len(message)} chars in {len(chunks)} parts"
     return f"Sent ({sent_info}). Typing indicator: {'stopped' if end_typing else 'still running'}."
 
