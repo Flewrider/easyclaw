@@ -346,60 +346,84 @@ install_bot_identity() {
     log "INFO" "CLAUDE.md installed with bot name: ${BOT_NAME:-Clawdy}, user: ${SETUP_USER:-$USER}"
 }
 
-# Step 5b: Collect configuration from user
+# Step 5b: Collect configuration from user (saves after each prompt so Ctrl+C is safe)
 collect_config() {
     print_info "Configuring EasyClaw..."
 
     # Username
-    local default_user="${USER:-ubuntu}"
-    read -p "$(echo -e "${YELLOW}?${NC} System username (default: $default_user): ")" username
-    username="${username:-$default_user}"
-
-    # Validate username exists
-    if ! id "$username" &> /dev/null; then
-        print_error "User $username does not exist"
-        return 1
+    if [ -z "$SETUP_USER" ]; then
+        local default_user="${USER:-ubuntu}"
+        read -p "$(echo -e "${YELLOW}?${NC} System username (default: $default_user): ")" username
+        username="${username:-$default_user}"
+        if ! id "$username" &> /dev/null; then
+            print_error "User $username does not exist"
+            return 1
+        fi
+        SETUP_USER="$username"
+        save_state
+    else
+        print_success "System username: $SETUP_USER (saved)"
     fi
-    SETUP_USER="$username"
 
-    # Telegram token (optional)
-    read -p "$(echo -e "${YELLOW}?${NC} Telegram bot token (optional, press enter to skip): ")" token
-    if [ -n "$token" ]; then
-        # Basic validation: should be digits:AlphaNum
-        if [[ ! $token =~ ^[0-9]+:[A-Za-z0-9_-]+$ ]]; then
-            print_warn "Token format looks incorrect (should be: 123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11)"
-            if confirm "Use anyway?"; then
+    # Telegram token
+    if [ -z "$TELEGRAM_TOKEN" ]; then
+        read -p "$(echo -e "${YELLOW}?${NC} Telegram bot token (optional, press enter to skip): ")" token
+        if [ -n "$token" ]; then
+            if [[ ! $token =~ ^[0-9]+:[A-Za-z0-9_-]+$ ]]; then
+                print_warn "Token format looks incorrect (should be: 123456:ABC-DEF...)"
+                if confirm "Use anyway?"; then
+                    TELEGRAM_TOKEN="$token"
+                fi
+            else
                 TELEGRAM_TOKEN="$token"
             fi
         else
-            TELEGRAM_TOKEN="$token"
+            TELEGRAM_TOKEN="skip"  # sentinel so we don't re-ask on resume
         fi
+        save_state
+    else
+        [ "$TELEGRAM_TOKEN" = "skip" ] && print_success "Telegram token: skipped (saved)" \
+            || print_success "Telegram token: configured (saved)"
     fi
+    [ "$TELEGRAM_TOKEN" = "skip" ] && TELEGRAM_TOKEN=""
 
     # Claude model
-    echo
-    print_info "Default Claude model:"
-    echo "  1) Haiku (fast, cheap) - RECOMMENDED"
-    echo "  2) Sonnet (balanced)"
-    echo "  3) Opus (most capable)"
-    read -p "$(echo -e "${YELLOW}?${NC} Choose (1-3, default 1): ")" model_choice
-    model_choice="${model_choice:-1}"
-
-    case "$model_choice" in
-        1) CLAUDE_MODEL="haiku" ;;
-        2) CLAUDE_MODEL="sonnet" ;;
-        3) CLAUDE_MODEL="opus" ;;
-        *) print_warn "Invalid choice, using haiku"; CLAUDE_MODEL="haiku" ;;
-    esac
+    if [ -z "$CLAUDE_MODEL" ]; then
+        echo
+        print_info "Default Claude model:"
+        echo "  1) Haiku (fast, cheap) - RECOMMENDED"
+        echo "  2) Sonnet (balanced)"
+        echo "  3) Opus (most capable)"
+        read -p "$(echo -e "${YELLOW}?${NC} Choose (1-3, default 1): ")" model_choice
+        case "${model_choice:-1}" in
+            1) CLAUDE_MODEL="haiku" ;;
+            2) CLAUDE_MODEL="sonnet" ;;
+            3) CLAUDE_MODEL="opus" ;;
+            *) print_warn "Invalid choice, using haiku"; CLAUDE_MODEL="haiku" ;;
+        esac
+        save_state
+    else
+        print_success "Model: $CLAUDE_MODEL (saved)"
+    fi
 
     # Bot identity
-    echo
-    print_info "Bot identity (used in CLAUDE.md and first-startup message):"
-    read -p "$(echo -e "${YELLOW}?${NC} Bot name (default: Clawdy): ")" bot_name_input
-    BOT_NAME="${bot_name_input:-Clawdy}"
+    if [ -z "$BOT_NAME" ]; then
+        echo
+        print_info "Bot identity:"
+        read -p "$(echo -e "${YELLOW}?${NC} Bot name (default: Clawdy): ")" bot_name_input
+        BOT_NAME="${bot_name_input:-Clawdy}"
+        save_state
+    else
+        print_success "Bot name: $BOT_NAME (saved)"
+    fi
 
-    read -p "$(echo -e "${YELLOW}?${NC} Bot purpose, one line (default: your personal AI assistant): ")" bot_purpose_input
-    BOT_PURPOSE="${bot_purpose_input:-your personal AI assistant}"
+    if [ -z "$BOT_PURPOSE" ]; then
+        read -p "$(echo -e "${YELLOW}?${NC} Bot purpose (default: your personal AI assistant): ")" bot_purpose_input
+        BOT_PURPOSE="${bot_purpose_input:-your personal AI assistant}"
+        save_state
+    else
+        print_success "Bot purpose: $BOT_PURPOSE (saved)"
+    fi
 
     print_success "Configuration complete"
 }
