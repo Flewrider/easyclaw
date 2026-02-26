@@ -21,6 +21,8 @@ BOT_PURPOSE=""
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VERBOSE="${VERBOSE:-0}"
 LOG_FILE="/tmp/easyclaw-setup-$(date +%s).log"
+STATE_FILE="$HOME/.easyclaw-setup-state"
+COMPLETED_STEPS=()
 
 # Parse --verbose flag
 if [[ " $* " =~ " --verbose " ]]; then
@@ -56,7 +58,64 @@ confirm() {
     [[ $response =~ ^[Yy]$ ]]
 }
 
-# Step 1: Check dependencies
+# ── State persistence ─────────────────────────────────────────────────────────
+
+save_state() {
+    cat > "$STATE_FILE" << EOF
+SETUP_USER="$SETUP_USER"
+CLAUDE_MODEL="$CLAUDE_MODEL"
+TELEGRAM_TOKEN="$TELEGRAM_TOKEN"
+SESSION_ID="$SESSION_ID"
+BOT_NAME="$BOT_NAME"
+BOT_PURPOSE="$BOT_PURPOSE"
+COMPLETED_STEPS=(${COMPLETED_STEPS[*]+"${COMPLETED_STEPS[*]}"})
+EOF
+    log "DEBUG" "State saved to $STATE_FILE"
+}
+
+load_state() {
+    # shellcheck source=/dev/null
+    source "$STATE_FILE"
+    log "INFO" "Loaded saved state from $STATE_FILE"
+}
+
+mark_done() {
+    COMPLETED_STEPS+=("$1")
+    save_state
+}
+
+is_done() {
+    local step="$1"
+    for s in "${COMPLETED_STEPS[@]+"${COMPLETED_STEPS[@]}"}"; do
+        [ "$s" = "$step" ] && return 0
+    done
+    return 1
+}
+
+# Ask user to resume or restart if a previous state exists
+handle_resume() {
+    [ ! -f "$STATE_FILE" ] && return 0
+
+    local done_list
+    done_list=$(source "$STATE_FILE" 2>/dev/null && echo "${COMPLETED_STEPS[*]+"${COMPLETED_STEPS[*]}"}" || echo "")
+
+    echo
+    echo -e "${YELLOW}⚡ Previous setup found.${NC}"
+    [ -n "$done_list" ] && echo "   Completed steps: $done_list"
+    echo
+
+    if confirm "Resume from where you left off? (n = restart from scratch)"; then
+        load_state
+        print_info "Resuming setup..."
+        log "INFO" "User chose to resume setup"
+    else
+        rm -f "$STATE_FILE"
+        print_info "Starting fresh..."
+        log "INFO" "User chose to restart setup"
+    fi
+}
+
+# ── Step 1: Check dependencies ─────────────────────────────────────────────────
 check_dependencies() {
     print_info "Checking dependencies..."
     log "DEBUG" "Starting dependency check"
@@ -563,25 +622,28 @@ main() {
     echo
     [ "$VERBOSE" = "1" ] && echo "📝 Logging to: $LOG_FILE" && echo
 
-    check_dependencies || { log "ERROR" "Dependency check failed"; return 1; }
-    init_session_id
-    first_launch_claude || { log "ERROR" "First launch setup failed"; return 1; }
-    patch_claude_json
-    collect_config || { log "ERROR" "Configuration collection failed"; return 1; }
-    install_bot_identity
-    write_env_file
-    install_mcp_server
-    install_start_script
+    handle_resume
+
+    is_done "dependencies" || { check_dependencies || { log "ERROR" "Dependency check failed"; return 1; }; mark_done "dependencies"; }
+    is_done "session_id"   || { init_session_id; mark_done "session_id"; }
+    is_done "oauth"        || { first_launch_claude || { log "ERROR" "First launch setup failed"; return 1; }; mark_done "oauth"; }
+    is_done "claude_json"  || { patch_claude_json; mark_done "claude_json"; }
+    is_done "config"       || { collect_config || { log "ERROR" "Configuration collection failed"; return 1; }; mark_done "config"; }
+    is_done "identity"     || { install_bot_identity; mark_done "identity"; }
+    is_done "env_file"     || { write_env_file; mark_done "env_file"; }
+    is_done "mcp_server"   || { install_mcp_server; mark_done "mcp_server"; }
+    is_done "start_script" || { install_start_script; mark_done "start_script"; }
 
     echo
     print_info "Next: Install systemd services (requires sudo)"
     if ! confirm "Continue with systemd installation?"; then
         print_warn "Setup paused. Run this script again to continue."
         log "INFO" "Setup paused by user"
+        save_state
         return 0
     fi
 
-    install_services || { log "ERROR" "Service installation failed"; return 1; }
+    is_done "services" || { install_services || { log "ERROR" "Service installation failed"; return 1; }; mark_done "services"; }
 
     echo
     if confirm "Enable security hardening (UFW + Tailscale)?"; then
@@ -591,6 +653,8 @@ main() {
     echo
     print_info "Starting services..."
     start_services
+    rm -f "$STATE_FILE"
+    log "INFO" "Setup complete — state file removed"
 
     echo
     print_success "EasyClaw setup complete!"
