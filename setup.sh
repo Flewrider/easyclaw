@@ -20,7 +20,7 @@ BOT_NAME=""
 BOT_PURPOSE=""
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VERBOSE="${VERBOSE:-0}"
-LOG_FILE="/tmp/easyclaw-setup-$(date +%s).log"
+LOG_FILE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/setup.log"
 STATE_FILE="$HOME/.easyclaw-setup-state"
 COMPLETED_STEPS=()
 
