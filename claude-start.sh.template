@@ -3,9 +3,12 @@
 # Accessible via: tmux attach -t claude
 # Managed by systemd (claude-code.service)
 
+# Ensure claude is on PATH (installed to ~/.local/bin by the official installer)
+export PATH="%%HOME%%/.local/bin:$PATH"
+
 SESSION="claude"
 WORKDIR="%%HOME%%"
-CLAUDE="claude"
+CLAUDE="%%HOME%%/.local/bin/claude"
 SESSION_ID="%%SESSION_ID%%"
 
 # Reset status to idle on every restart

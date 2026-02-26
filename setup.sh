@@ -658,6 +658,16 @@ main() {
     is_done "mcp_server"   || { install_mcp_server; mark_done "mcp_server"; }
     is_done "start_script" || { install_start_script; mark_done "start_script"; }
 
+    # Stop any running services before reinstalling
+    for service_file in "$SCRIPT_DIR"/services/*.service; do
+        [ -f "$service_file" ] || continue
+        local svc=$(basename "$service_file")
+        if sudo systemctl is-active --quiet "$svc" 2>/dev/null; then
+            print_info "Stopping $svc..."
+            sudo systemctl stop "$svc" 2>/dev/null || true
+        fi
+    done
+
     echo
     print_info "Next: Install systemd services (requires sudo)"
     if ! confirm "Continue with systemd installation?"; then

@@ -93,7 +93,7 @@ sudo systemctl daemon-reload
 sudo systemctl restart claude-code telegram-bot
 ```
 
-See `env.example` for all available variables.
+See `default.env` for all available variables.
 
 ---
 
@@ -141,7 +141,6 @@ sudo systemctl disable claude-code
 ```
 easyclaw/
 ├── setup.sh              # Main setup script
-├── env.example           # Environment variable template
 ├── README.md             # This file
 └── services/
     ├── claude-code.service   # systemd unit for Claude Code
