@@ -301,8 +301,17 @@ first_launch_claude() {
     echo    "  Complete the login, then Claude will initialize and exit automatically."
     echo
 
-    # Run directly — passes 'exit' as the first prompt so Claude exits after OAuth completes
-    claude --session-id "$SESSION_ID" --dangerously-skip-permissions --browser exit
+    # Run directly in the terminal (NOT tmux) so the user can complete the OAuth flow.
+    # If SETUP_USER differs from current user (e.g. root running setup for clawdy),
+    # switch to that user so claude.json lands in the right home directory.
+    local claude_bin="${USER_HOME}/.local/bin/claude"
+    local launch_cmd="IS_SANDBOX=1 $claude_bin --session-id $SESSION_ID --dangerously-skip-permissions --browser exit"
+
+    if [ "$(whoami)" != "$SETUP_USER" ]; then
+        su - "$SETUP_USER" -c "$launch_cmd"
+    else
+        eval "$launch_cmd"
+    fi
 
     if [ ! -f "${USER_HOME}/.claude/claude.json" ]; then
         print_warn "claude.json not found after setup — OAuth may not have completed."
