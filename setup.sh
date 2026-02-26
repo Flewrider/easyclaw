@@ -66,7 +66,7 @@ check_dependencies() {
         "jq:jq"
         "git:git"
         "python3:python3"
-        "node:node"
+        "tmux:tmux"
     )
 
     for check in "${checks[@]}"; do
@@ -79,12 +79,21 @@ check_dependencies() {
         fi
     done
 
-    # Check Claude CLI
+    # Check Claude CLI — install automatically if missing
     if ! command -v claude &> /dev/null; then
-        missing+=("claude (Claude Code CLI)")
-        log "WARN" "Missing: claude CLI"
+        print_info "Claude Code CLI not found — installing..."
+        log "INFO" "Installing Claude Code CLI via official installer"
+        if curl -fsSL https://claude.ai/install.sh | bash; then
+            print_success "Claude Code CLI installed"
+            log "INFO" "Claude Code CLI installed successfully"
+            # Reload PATH in case installer added to ~/.local/bin or similar
+            export PATH="$HOME/.local/bin:$PATH"
+        else
+            missing+=("claude (Claude Code CLI) — install failed, retry manually: curl -fsSL https://claude.ai/install.sh | bash")
+            log "ERROR" "Claude Code CLI install failed"
+        fi
     else
-        log "DEBUG" "Found: claude CLI"
+        log "DEBUG" "Found: claude CLI ($(claude --version 2>/dev/null | head -1))"
     fi
 
     # Check Python version if present
@@ -103,7 +112,7 @@ check_dependencies() {
             echo "  - $item"
             log "ERROR" "Missing dependency: $item"
         done
-        print_warn "Install with: sudo apt install curl jq git python3 nodejs"
+        print_warn "Install with: sudo apt install curl jq git python3 tmux"
         return 1
     fi
 
