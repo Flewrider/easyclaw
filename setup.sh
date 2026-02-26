@@ -24,6 +24,9 @@ LOG_FILE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/setup.log"
 STATE_FILE="$HOME/.easyclaw-setup-state"
 COMPLETED_STEPS=()
 
+# Ensure ~/.local/bin is always on PATH (claude installed there by official installer)
+export PATH="$HOME/.local/bin:$PATH"
+
 # Parse --verbose flag
 if [[ " $* " =~ " --verbose " ]]; then
     VERBOSE=1
@@ -504,7 +507,7 @@ install_mcp_server() {
     # Install required Python packages
     # --break-system-packages needed on Ubuntu 22.04+ (PEP 668 externally managed env)
     print_info "Installing Python dependencies (mcp, requests)..."
-    if pip3 install --quiet --break-system-packages mcp requests; then
+    if pip3 install --quiet --break-system-packages mcp requests 2>&1 | tee -a "$LOG_FILE"; then
         log "INFO" "Python packages installed: mcp, requests"
         print_success "Python packages installed"
     else
