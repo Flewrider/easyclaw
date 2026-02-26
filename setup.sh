@@ -150,6 +150,7 @@ check_dependencies() {
         "jq:jq"
         "git:git"
         "python3:python3"
+        "pip3:python3-pip"
         "tmux:tmux"
     )
 
@@ -525,13 +526,14 @@ install_mcp_server() {
 
     # Install required Python packages
     # --break-system-packages needed on Ubuntu 22.04+ (PEP 668 externally managed env)
+    # Use python3 -m pip (works regardless of whether pip3 binary is in PATH)
     print_info "Installing Python dependencies (mcp, requests)..."
-    if pip3 install --quiet --break-system-packages mcp requests 2>&1 | tee -a "$LOG_FILE"; then
+    if python3 -m pip install --quiet --break-system-packages mcp requests 2>&1 | tee -a "$LOG_FILE"; then
         log "INFO" "Python packages installed: mcp, requests"
         print_success "Python packages installed"
     else
-        print_warn "pip3 install failed — MCP server may not work"
-        log "WARN" "pip3 install mcp requests failed"
+        print_warn "pip install failed — MCP server may not work"
+        log "WARN" "python3 -m pip install mcp requests failed"
     fi
 
     # Register via claude mcp add (writes to ~/.claude.json project config)
