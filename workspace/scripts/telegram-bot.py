@@ -147,7 +147,7 @@ def download_file(token, file_id, filename_hint):
         return None
 
 
-def start_typing(chat_id, timeout=30):
+def start_typing(chat_id, timeout=90):
     """Start background typing indicator thread. Auto-stops after timeout seconds
     even if no telegram_send is ever called (e.g. agent decides not to respond)."""
     global _typing_thread
