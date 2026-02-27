@@ -15,6 +15,7 @@ import subprocess
 import threading
 import requests
 import logging
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from datetime import datetime
 
@@ -291,6 +292,12 @@ def main():
         cfg["allowed_chats"] = list(set(cfg["allowed_chats"] + [int(c) for c in env_allowed if c.isdigit()]))
         save_config(cfg)
 
+    # Start bridge server if configured
+    bridge_key = env.get("BRIDGE_API_KEY", "")
+    bridge_port = int(env.get("BRIDGE_PORT", "8765"))
+    if bridge_key:
+        start_bridge_server(bridge_key, bridge_port)
+
     # Verify bot token works
     me = tg_request(token, "getMe")
     if not me.get("ok"):
@@ -438,6 +445,63 @@ def main():
             if not success:
                 stop_typing()
                 send_message(token, chat_id, "⚠️ Failed to reach Clawdy session. Is it running?")
+
+
+def start_bridge_server(api_key: str, port: int):
+    """Start a lightweight HTTP server for bot-to-bot injection over Tailscale."""
+
+    class BridgeHandler(BaseHTTPRequestHandler):
+        def log_message(self, fmt, *args):
+            log.debug(f"Bridge: {fmt % args}")
+
+        def do_POST(self):
+            if self.path != "/inject":
+                self.send_response(404)
+                self.end_headers()
+                return
+
+            auth = self.headers.get("X-API-Key", "")
+            if auth != api_key:
+                self.send_response(403)
+                self.end_headers()
+                self.wfile.write(b"Forbidden")
+                return
+
+            length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(length)
+            try:
+                data = json.loads(body)
+                message = data.get("message", "").strip()
+                sender = data.get("sender", "Peer")
+            except Exception:
+                self.send_response(400)
+                self.end_headers()
+                self.wfile.write(b"Bad JSON")
+                return
+
+            if not message:
+                self.send_response(400)
+                self.end_headers()
+                self.wfile.write(b"No message")
+                return
+
+            log.info(f"Bridge inject from {sender}: {message[:80]}")
+            ok = inject_to_claude(message, sender)
+            self.send_response(200 if ok else 500)
+            self.end_headers()
+            self.wfile.write(b"ok" if ok else b"inject failed")
+
+    # Bind to Tailscale interface only (or all if not available)
+    try:
+        import subprocess as _sp
+        ts_ip = _sp.check_output(["tailscale", "ip", "-4"], text=True).strip()
+    except Exception:
+        ts_ip = "0.0.0.0"
+
+    server = HTTPServer((ts_ip, port), BridgeHandler)
+    t = threading.Thread(target=server.serve_forever, daemon=True)
+    t.start()
+    log.info(f"Bridge server listening on {ts_ip}:{port}")
 
 
 if __name__ == "__main__":

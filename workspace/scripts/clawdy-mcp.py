@@ -309,6 +309,30 @@ def impl_telegram_send_file(file_path: str, caption: str | None = None) -> str:
         return f"Error sending file: {e}"
 
 
+def impl_send_to_peer(message: str, sender: str = "SuperClawdy") -> str:
+    """POST a message to the peer bot's bridge /inject endpoint over Tailscale."""
+    import requests as _req
+    env = load_env()
+    peer_url = env.get("PEER_BRIDGE_URL", "").rstrip("/")
+    api_key = env.get("BRIDGE_API_KEY", "")
+    if not peer_url:
+        return "PEER_BRIDGE_URL not set in .env."
+    if not api_key:
+        return "BRIDGE_API_KEY not set in .env."
+    try:
+        r = _req.post(
+            f"{peer_url}/inject",
+            json={"message": message, "sender": sender},
+            headers={"X-API-Key": api_key},
+            timeout=10,
+        )
+        if r.status_code == 200:
+            return f"Sent to peer: {message[:80]}"
+        return f"Peer returned {r.status_code}: {r.text}"
+    except Exception as e:
+        return f"Failed to reach peer: {e}"
+
+
 def impl_activity_log(category: str, description: str) -> str:
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
     entry = f"[{timestamp}] {category}: {description}\n"
@@ -843,6 +867,24 @@ async def list_tools() -> list[types.Tool]:
             },
         ),
         types.Tool(
+            name="send_to_peer",
+            description="Send a message to the peer bot (VPS Clawdy) over the Tailscale bridge. The peer bot will receive it as a TELEGRAM injection and can reply via telegram_send.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "message": {
+                        "type": "string",
+                        "description": "Message to send to the peer bot",
+                    },
+                    "sender": {
+                        "type": "string",
+                        "description": "Display name shown to the peer (default: SuperClawdy)",
+                    },
+                },
+                "required": ["message"],
+            },
+        ),
+        types.Tool(
             name="activity_log",
             description="Log an activity to the activity log (appears in optional daily briefings).",
             inputSchema={
@@ -1064,6 +1106,10 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextCont
         elif name == "telegram_send_file":
             result = impl_telegram_send_file(
                 arguments["file_path"], arguments.get("caption")
+            )
+        elif name == "send_to_peer":
+            result = impl_send_to_peer(
+                arguments["message"], arguments.get("sender", "SuperClawdy")
             )
         elif name == "activity_log":
             result = impl_activity_log(arguments["category"], arguments["description"])
