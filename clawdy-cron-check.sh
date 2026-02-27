@@ -57,6 +57,11 @@ if [ -n "$pane_last_used" ] && [ "$pane_last_used" -gt 0 ] 2>/dev/null; then
   fi
 fi
 
+# Prune old received files (>7 days) to prevent disk fill
+if [ -d "$HOME/telegram-files" ]; then
+  find "$HOME/telegram-files" -type f -mtime +7 -delete 2>/dev/null || true
+fi
+
 # Inject task check with [CRON] tag — no Telegram messages, log to activity log only
 tmux send-keys -t "$SESSION:$WINDOW" "[CRON] Check ~/.easyclaw/tasks.md — if there are pending or in-progress tasks, continue working on them and update their status."
 sleep 1

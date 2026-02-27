@@ -627,14 +627,6 @@ install_scripts() {
     print_info "Installing scripts to ~/.easyclaw/scripts/..."
     mkdir -p "${USER_HOME}/.easyclaw/scripts"
 
-    # Copy typing loop
-    if [ -f "$SCRIPT_DIR/clawdy-typing-loop.py" ]; then
-        cp "$SCRIPT_DIR/clawdy-typing-loop.py" "${USER_HOME}/.easyclaw/scripts/"
-        print_success "Installed clawdy-typing-loop.py"
-    else
-        print_warn "clawdy-typing-loop.py not found in $SCRIPT_DIR — skipping"
-    fi
-
     # Copy cron check
     if [ -f "$SCRIPT_DIR/clawdy-cron-check.sh" ]; then
         cp "$SCRIPT_DIR/clawdy-cron-check.sh" "${USER_HOME}/.easyclaw/scripts/"
