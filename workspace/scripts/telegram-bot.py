@@ -217,8 +217,8 @@ def request_approval(token, admin_chat_id, new_chat_id, sender_name):
     log.info(f"Sent approval request to admin for chat {new_chat_id}")
 
 
-def get_updates(token, offset=None):
-    params = {"timeout": 30, "allowed_updates": ["message"]}
+def get_updates(token, offset=None, poll_timeout=30):
+    params = {"timeout": poll_timeout, "allowed_updates": ["message"]}
     if offset:
         params["offset"] = offset
     url = f"https://api.telegram.org/bot{token}/getUpdates"
@@ -276,6 +276,17 @@ def main():
         if not data.get("ok"):
             time.sleep(5)
             continue
+
+        # If we got updates, wait briefly then do a non-blocking follow-up poll
+        # to catch any split-message parts that arrived just after the first poll
+        # returned. Telegram splits messages >4096 chars into consecutive updates
+        # with no "more coming" indicator — the collect window closes the gap.
+        if data.get("result"):
+            time.sleep(0.3)
+            next_offset = data["result"][-1]["update_id"] + 1
+            followup = get_updates(token, next_offset, poll_timeout=0)
+            if followup.get("result"):
+                data["result"].extend(followup["result"])
 
         # Collect validated messages from this polling batch, grouped by chat.
         # Multiple parts of a long Telegram message arrive in the same batch —
