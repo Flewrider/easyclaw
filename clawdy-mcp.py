@@ -10,6 +10,12 @@ Tools exposed:
   - telegram_send(message, end_typing?)
   - activity_log(category, description)
   - set_status(status)
+  - task_add(description, status?)
+  - task_list()
+  - task_done(pattern)
+  - task_remove(pattern)
+  - spawn_agent(prompt, model?, allowed_tools?)
+  - converse_with_agent(session_id, prompt, model?, allowed_tools?)
 
 Run via stdio — registered in ~/.claude/settings.json.
 Install: pip install mcp
@@ -360,6 +366,120 @@ def impl_task_remove(pattern: str) -> str:
     return f"Removed {len(removed)} task(s):\n" + "\n".join(removed)
 
 
+# Tools that subagents are never allowed to use regardless of caller's allowed_tools
+_AGENT_BLOCKED_TOOLS = ["mcp__clawdy-mcp__telegram_send"]
+
+
+def _build_agent_cmd(
+    prompt: str,
+    model: str,
+    allowed_tools: list[str] | None,
+    session_id: str | None = None,
+) -> list[str]:
+    cmd = ["claude", "-p", prompt, "--output-format", "json", "--model", model]
+    if session_id:
+        cmd += ["--resume", session_id]
+    if allowed_tools is not None:
+        # Explicit allowlist — strip any blocked tools and pass as allowedTools
+        safe = [t for t in allowed_tools if t not in _AGENT_BLOCKED_TOOLS]
+        if safe:
+            cmd += ["--allowedTools"] + safe
+        else:
+            cmd += ["--tools", ""]  # no tools at all
+    else:
+        # Default: full permissions but block telegram
+        cmd += ["--dangerously-skip-permissions"]
+        cmd += ["--disallowedTools", ",".join(_AGENT_BLOCKED_TOOLS)]
+    return cmd
+
+
+def _parse_agent_output(raw: str) -> str:
+    """Parse JSON output from claude --output-format json into a clean summary."""
+    data = json.loads(raw)
+    clean = {
+        "result": data.get("result", ""),
+        "session_id": data.get("session_id", ""),
+        "is_error": data.get("is_error", False),
+        "cost_usd": round(data.get("total_cost_usd", 0), 6),
+        "duration_ms": data.get("duration_ms", 0),
+        "num_turns": data.get("num_turns", 0),
+    }
+    return json.dumps(clean, indent=2)
+
+
+async def impl_spawn_agent(
+    prompt: str,
+    model: str = "claude-haiku-4-5-20251001",
+    allowed_tools: list[str] | None = None,
+) -> str:
+    """Launch a headless Claude subagent and return its response + session ID."""
+    cmd = _build_agent_cmd(prompt, model, allowed_tools)
+    env = os.environ.copy()
+    env.pop("CLAUDECODE", None)  # allow nested claude session
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=300)
+    except asyncio.TimeoutError:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        return "Agent timed out after 300 seconds."
+    except Exception as e:
+        return f"Error launching agent: {e}"
+
+    if proc.returncode != 0:
+        return f"Agent failed (exit {proc.returncode}): {stderr.decode()[:500]}"
+
+    try:
+        return _parse_agent_output(stdout.decode())
+    except (json.JSONDecodeError, KeyError) as e:
+        return f"Failed to parse agent output: {e}\nRaw: {stdout.decode()[:500]}"
+
+
+async def impl_converse_with_agent(
+    session_id: str,
+    prompt: str,
+    model: str = "claude-haiku-4-5-20251001",
+    allowed_tools: list[str] | None = None,
+) -> str:
+    """Send a follow-up prompt to a previously spawned headless agent session."""
+    cmd = _build_agent_cmd(prompt, model, allowed_tools, session_id=session_id)
+    env = os.environ.copy()
+    env.pop("CLAUDECODE", None)
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=300)
+    except asyncio.TimeoutError:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        return "Agent timed out after 300 seconds."
+    except Exception as e:
+        return f"Error conversing with agent: {e}"
+
+    if proc.returncode != 0:
+        return f"Agent failed (exit {proc.returncode}): {stderr.decode()[:500]}"
+
+    try:
+        return _parse_agent_output(stdout.decode())
+    except (json.JSONDecodeError, KeyError) as e:
+        return f"Failed to parse agent output: {e}\nRaw: {stdout.decode()[:500]}"
+
+
 # ── MCP Server ────────────────────────────────────────────────────────────────
 
 server = Server("clawdy-mcp")
@@ -510,6 +630,64 @@ async def list_tools() -> list[types.Tool]:
                 "required": ["pattern"],
             },
         ),
+        types.Tool(
+            name="spawn_agent",
+            description=(
+                "Launch a headless Claude Code subagent with a prompt. Returns the agent's response, "
+                "session_id (use with converse_with_agent for follow-ups), cost, and duration. "
+                "telegram_send is always blocked for subagents. Default model: haiku."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "prompt": {"type": "string", "description": "The prompt to send to the subagent"},
+                    "model": {
+                        "type": "string",
+                        "description": "Model to use. Aliases: 'haiku', 'sonnet', 'opus', or full model ID. Default: claude-haiku-4-5-20251001",
+                        "default": "claude-haiku-4-5-20251001",
+                    },
+                    "allowed_tools": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "Explicit list of tools to allow (e.g. ['Bash', 'Read', 'Write']). "
+                            "Omit to grant all permissions (--dangerously-skip-permissions). "
+                            "telegram_send is always blocked regardless."
+                        ),
+                    },
+                },
+                "required": ["prompt"],
+            },
+        ),
+        types.Tool(
+            name="converse_with_agent",
+            description=(
+                "Send a follow-up prompt to a previously spawned headless agent session. "
+                "Use the session_id returned by spawn_agent. Returns the agent's response "
+                "and the same session_id for further turns."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "session_id": {
+                        "type": "string",
+                        "description": "Session ID returned by spawn_agent",
+                    },
+                    "prompt": {"type": "string", "description": "Follow-up prompt to send"},
+                    "model": {
+                        "type": "string",
+                        "description": "Model to use (defaults to claude-haiku-4-5-20251001)",
+                        "default": "claude-haiku-4-5-20251001",
+                    },
+                    "allowed_tools": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Same as spawn_agent. Omit for full permissions (minus telegram).",
+                    },
+                },
+                "required": ["session_id", "prompt"],
+            },
+        ),
     ]
 
 
@@ -542,6 +720,19 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextCont
             result = impl_task_done(arguments["pattern"])
         elif name == "task_remove":
             result = impl_task_remove(arguments["pattern"])
+        elif name == "spawn_agent":
+            result = await impl_spawn_agent(
+                arguments["prompt"],
+                arguments.get("model", "claude-haiku-4-5-20251001"),
+                arguments.get("allowed_tools"),
+            )
+        elif name == "converse_with_agent":
+            result = await impl_converse_with_agent(
+                arguments["session_id"],
+                arguments["prompt"],
+                arguments.get("model", "claude-haiku-4-5-20251001"),
+                arguments.get("allowed_tools"),
+            )
         else:
             result = f"Unknown tool: {name}"
     except Exception as e:

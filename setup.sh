@@ -540,6 +540,14 @@ install_mcp_server() {
         log "WARN" "pip install mcp requests failed"
     fi
 
+    # Copy clawdy-mcp.py to a stable location independent of the repo path
+    local mcp_dest="${USER_HOME}/.easyclaw/scripts/clawdy-mcp.py"
+    mkdir -p "${USER_HOME}/.easyclaw/scripts"
+    cp "$SCRIPT_DIR/clawdy-mcp.py" "$mcp_dest"
+    chmod +x "$mcp_dest"
+    print_success "Installed clawdy-mcp.py -> $mcp_dest"
+    log "INFO" "MCP server copied to: $mcp_dest"
+
     # Register MCP server by patching ~/.claude.json directly
     # (claude mcp add writes to the cwd project, which may not be USER_HOME)
     local claude_json="${USER_HOME}/.claude.json"
@@ -547,11 +555,11 @@ install_mcp_server() {
     jq ".projects[\"$USER_HOME\"].mcpServers[\"clawdy-mcp\"] = {
           \"type\": \"stdio\",
           \"command\": \"python3\",
-          \"args\": [\"$SCRIPT_DIR/clawdy-mcp.py\"],
+          \"args\": [\"$mcp_dest\"],
           \"env\": {}
         }" "$claude_json" > "$claude_json.tmp" && mv "$claude_json.tmp" "$claude_json"
     print_success "Registered clawdy-mcp in ~/.claude.json for $USER_HOME"
-    log "INFO" "MCP server registered in ~/.claude.json: python3 $SCRIPT_DIR/clawdy-mcp.py"
+    log "INFO" "MCP server registered in ~/.claude.json: python3 $mcp_dest"
 
     # Set the default model in settings.json
     local settings="${USER_HOME}/.claude/settings.json"

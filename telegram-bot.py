@@ -12,6 +12,7 @@ import sys
 import json
 import time
 import subprocess
+import threading
 import requests
 import logging
 from pathlib import Path
@@ -21,9 +22,12 @@ EASYCLAW = Path.home() / ".easyclaw"
 ENV_FILE = EASYCLAW / ".env"
 CONFIG_FILE = EASYCLAW / "telegram-config.json"
 LOG_FILE = EASYCLAW / "telegram-bot.log"
-TYPING_PID_FILE = EASYCLAW / "telegram-typing.pid"
-TYPING_LOOP = EASYCLAW / "scripts" / "clawdy-typing-loop.py"
 FILES_DIR = Path.home() / "telegram-files"  # overridden in main() from env
+
+# Typing indicator state (in-process thread)
+_typing_thread: threading.Thread | None = None
+_stop_typing_event = threading.Event()
+_bot_token: str = ""
 TMUX_SESSION = "claude"
 TMUX_WINDOW = "claude"
 FILE_SIZE_LIMIT = 20 * 1024 * 1024  # 20 MB — Telegram bot download hard limit
@@ -134,27 +138,30 @@ def download_file(token, file_id, filename_hint):
 
 
 def start_typing(chat_id):
-    """Start background typing indicator loop."""
-    stop_typing()  # kill any existing loop first
-    proc = subprocess.Popen(
-        [sys.executable, str(TYPING_LOOP), str(chat_id)],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-    )
-    TYPING_PID_FILE.write_text(str(proc.pid))
-    log.info(f"Typing indicator started (PID {proc.pid})")
+    """Start background typing indicator thread."""
+    global _typing_thread
+    stop_typing()  # stop any existing thread first
+    _stop_typing_event.clear()
+
+    def _loop():
+        while True:
+            tg_request(_bot_token, "sendChatAction", chat_id=chat_id, action="typing")
+            if _stop_typing_event.wait(4):
+                break
+
+    _typing_thread = threading.Thread(target=_loop, daemon=True)
+    _typing_thread.start()
+    log.info("Typing indicator started (thread)")
+
 
 def stop_typing():
-    """Stop the typing indicator loop."""
-    if TYPING_PID_FILE.exists():
-        try:
-            pid = int(TYPING_PID_FILE.read_text().strip())
-            os.kill(pid, 9)
-            log.info(f"Typing indicator stopped (PID {pid})")
-        except (ProcessLookupError, ValueError, PermissionError):
-            pass
-        TYPING_PID_FILE.unlink(missing_ok=True)
-    # Belt-and-suspenders: kill any stale loop that lost its PID file
-    subprocess.run(["pkill", "-9", "-f", "clawdy-typing-loop.py"], capture_output=True)
+    """Stop the typing indicator thread."""
+    global _typing_thread
+    if _typing_thread and _typing_thread.is_alive():
+        _stop_typing_event.set()
+        _typing_thread.join(timeout=2)
+        log.info("Typing indicator stopped")
+    _typing_thread = None
 
 def inject_to_claude(message_text, sender_name):
     """Inject a message into the tmux Claude session."""
@@ -203,9 +210,11 @@ def get_updates(token, offset=None):
 
 
 def main():
+    global _bot_token
     log.info("Clawdy Telegram Bot starting...")
     env = load_env()
     token = env.get("TELEGRAM_BOT_TOKEN", "")
+    _bot_token = token
 
     # Set files dir from env or fall back to ~/telegram-files
     global FILES_DIR
