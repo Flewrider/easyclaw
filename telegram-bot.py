@@ -93,9 +93,11 @@ def stop_typing():
             pid = int(TYPING_PID_FILE.read_text().strip())
             os.kill(pid, 9)
             log.info(f"Typing indicator stopped (PID {pid})")
-        except (ProcessLookupError, ValueError):
+        except (ProcessLookupError, ValueError, PermissionError):
             pass
         TYPING_PID_FILE.unlink(missing_ok=True)
+    # Belt-and-suspenders: kill any stale loop that lost its PID file
+    subprocess.run(["pkill", "-9", "-f", "clawdy-typing-loop.py"], capture_output=True)
 
 def inject_to_claude(message_text, sender_name):
     """Inject a message into the tmux Claude session."""
