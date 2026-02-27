@@ -14,10 +14,6 @@ RestartSec=10s
 StartLimitBurst=3
 StartLimitIntervalSec=60
 
-# Hardening
-NoNewPrivileges=true
-ProtectSystem=strict
-ReadWritePaths=%%HOME%%/.easyclaw
 
 [Install]
 WantedBy=multi-user.target

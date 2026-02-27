@@ -13,10 +13,6 @@ ExecStart=%%HOME%%/claude-start.sh
 Restart=always
 RestartSec=5s
 
-# Hardening
-NoNewPrivileges=true
-ProtectSystem=full
-ReadWritePaths=%%HOME%%/.claude %%HOME%%/claude-start.sh
 
 [Install]
 WantedBy=multi-user.target
