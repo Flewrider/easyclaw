@@ -6,14 +6,13 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=%%USER%%
-WorkingDirectory=%%EASYCLAW_DIR%%
-EnvironmentFile=%%EASYCLAW_DIR%%/.env
-ExecStart=/usr/bin/python3 %%EASYCLAW_DIR%%/telegram-bot.py
+WorkingDirectory=%%HOME%%/.easyclaw/scripts
+EnvironmentFile=%%HOME%%/.easyclaw/.env
+ExecStart=/usr/bin/python3 %%HOME%%/.easyclaw/scripts/telegram-bot.py
 Restart=always
 RestartSec=10s
 StartLimitBurst=3
 StartLimitIntervalSec=60
-
 
 [Install]
 WantedBy=multi-user.target

@@ -521,7 +521,6 @@ write_env_file() {
     }
 
     set_env_var "SETUP_USER"           "$SETUP_USER"
-    set_env_var "EASYCLAW_DIR"         "$SCRIPT_DIR"
     set_env_var "CLAUDE_DEFAULT_MODEL" "$CLAUDE_MODEL"
     set_env_var "BOT_NAME"             "${BOT_NAME:-Clawdy}"
     set_env_var "BOT_PURPOSE"          "${BOT_PURPOSE:-your personal AI assistant}"
@@ -539,8 +538,8 @@ install_mcp_server() {
     print_info "Installing clawdy-mcp server..."
     log "DEBUG" "MCP server: $SCRIPT_DIR/clawdy-mcp.py"
 
-    if [ ! -f "$SCRIPT_DIR/clawdy-mcp.py" ]; then
-        print_warn "clawdy-mcp.py not found — skipping MCP setup"
+    if [ ! -f "$SCRIPT_DIR/workspace/scripts/clawdy-mcp.py" ]; then
+        print_warn "workspace/scripts/clawdy-mcp.py not found — skipping MCP setup"
         return 0
     fi
 
@@ -559,7 +558,7 @@ install_mcp_server() {
     # Copy clawdy-mcp.py to a stable location independent of the repo path
     local mcp_dest="${USER_HOME}/.easyclaw/scripts/clawdy-mcp.py"
     mkdir -p "${USER_HOME}/.easyclaw/scripts"
-    cp "$SCRIPT_DIR/clawdy-mcp.py" "$mcp_dest"
+    cp "$SCRIPT_DIR/workspace/scripts/clawdy-mcp.py" "$mcp_dest"
     chmod +x "$mcp_dest"
     print_success "Installed clawdy-mcp.py -> $mcp_dest"
     log "INFO" "MCP server copied to: $mcp_dest"
@@ -627,21 +626,18 @@ install_scripts() {
     print_info "Installing scripts to ~/.easyclaw/scripts/..."
     mkdir -p "${USER_HOME}/.easyclaw/scripts"
 
-    # Copy cron check
-    if [ -f "$SCRIPT_DIR/clawdy-cron-check.sh" ]; then
-        cp "$SCRIPT_DIR/clawdy-cron-check.sh" "${USER_HOME}/.easyclaw/scripts/"
-        chmod +x "${USER_HOME}/.easyclaw/scripts/clawdy-cron-check.sh"
-        print_success "Installed clawdy-cron-check.sh"
-    else
-        print_warn "clawdy-cron-check.sh not found in $SCRIPT_DIR — skipping"
-    fi
+    local ws="$SCRIPT_DIR/workspace/scripts"
 
-    # Copy daily briefing if it exists
-    if [ -f "$SCRIPT_DIR/clawdy-daily-briefing.sh" ]; then
-        cp "$SCRIPT_DIR/clawdy-daily-briefing.sh" "${USER_HOME}/.easyclaw/scripts/"
-        chmod +x "${USER_HOME}/.easyclaw/scripts/clawdy-daily-briefing.sh"
-        print_success "Installed clawdy-daily-briefing.sh"
-    fi
+    # Copy all workspace scripts to ~/.easyclaw/scripts/
+    for script in clawdy-cron-check.sh clawdy-daily-briefing.sh telegram-bot.py; do
+        if [ -f "$ws/$script" ]; then
+            cp "$ws/$script" "${USER_HOME}/.easyclaw/scripts/"
+            chmod +x "${USER_HOME}/.easyclaw/scripts/$script" 2>/dev/null || true
+            print_success "Installed $script"
+        else
+            print_warn "$script not found in workspace/scripts/ — skipping"
+        fi
+    done
 
     # Install clawdy-restart to /usr/local/bin so it's on PATH
     if [ -f "$SCRIPT_DIR/clawdy-restart" ]; then
@@ -693,8 +689,6 @@ install_services() {
         sed \
             -e "s|%%USER%%|$SETUP_USER|g" \
             -e "s|%%HOME%%|$(eval echo ~$SETUP_USER)|g" \
-            -e "s|%%EASYCLAW_DIR%%|$SCRIPT_DIR|g" \
-            -e "s|%%CLAUDE_MODEL%%|$CLAUDE_MODEL|g" \
             "$service_file" > "$temp_service"
 
         # Install with sudo

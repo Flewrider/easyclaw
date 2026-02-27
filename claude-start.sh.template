@@ -9,10 +9,63 @@ export PATH="%%HOME%%/.local/bin:$PATH"
 SESSION="claude"
 WORKDIR="%%HOME%%"
 CLAUDE="%%HOME%%/.local/bin/claude"
+EASYCLAW="%%HOME%%/.easyclaw"
+RESTART_HISTORY="$EASYCLAW/restart-history"
 export IS_SANDBOX=1
 
-mkdir -p "%%HOME%%/.easyclaw"
-echo "idle" > "%%HOME%%/.easyclaw/status"
+mkdir -p "$EASYCLAW"
+echo "idle" > "$EASYCLAW/status"
+
+# ── Restart loop detection ─────────────────────────────────────────────────
+# Log this startup timestamp
+echo "$(date +%s)" >> "$RESTART_HISTORY"
+
+# Trim history to last 20 entries
+tail -20 "$RESTART_HISTORY" > "$RESTART_HISTORY.tmp" 2>/dev/null \
+    && mv "$RESTART_HISTORY.tmp" "$RESTART_HISTORY"
+
+# Count how many restarts occurred in the last 180 seconds
+NOW=$(date +%s)
+RECENT=0
+while IFS= read -r ts; do
+    [ -n "$ts" ] && [ $(( NOW - ts )) -le 180 ] && RECENT=$(( RECENT + 1 ))
+done < "$RESTART_HISTORY"
+
+if [ "$RECENT" -ge 4 ]; then
+    TIMESTAMP=$(date '+%Y-%m-%d %H:%M')
+    LOG="$EASYCLAW/activity-log.md"
+    echo "[$TIMESTAMP] system: Restart loop detected ($RECENT restarts in 3 min) — spawning headless recovery agent" >> "$LOG"
+
+    # Send Telegram alert if configured
+    if [ -f "$EASYCLAW/.env" ]; then
+        TOKEN=$(grep "^TELEGRAM_BOT_TOKEN=" "$EASYCLAW/.env" 2>/dev/null | cut -d= -f2)
+        CHAT_ID=$(grep "^TELEGRAM_CHAT_ID=" "$EASYCLAW/.env" 2>/dev/null | cut -d= -f2 | cut -d, -f1)
+        if [ -n "$TOKEN" ] && [ -n "$CHAT_ID" ]; then
+            curl -s --max-time 10 \
+                "https://api.telegram.org/bot${TOKEN}/sendMessage" \
+                -d "chat_id=${CHAT_ID}" \
+                --data-urlencode "text=⚠️ Clawdy restart loop: $RECENT crashes in 3 min. Spawning headless recovery agent — check ~/.easyclaw/recovery-agent.log for progress." \
+                > /dev/null 2>&1 || true
+        fi
+    fi
+
+    # Clear restart history so the fix doesn't re-trigger the detector
+    echo "" > "$RESTART_HISTORY"
+
+    # Spawn headless recovery agent (non-blocking, logs to recovery-agent.log)
+    nohup "$CLAUDE" -p "RECOVERY MODE: The Clawdy systemd service (claude-code.service) has crashed $RECENT times in the last 3 minutes and is stuck in a restart loop. Your job is to diagnose and fix the root cause. Steps: 1) Check service logs: journalctl -u claude-code --no-pager -n 100 2) Check activity log: tail -40 ~/.easyclaw/activity-log.md 3) Check Claude settings: cat ~/.claude/settings.json 4) Check Claude config: cat ~/.claude.json 5) Check the start script: cat ~/claude-start.sh 6) Look for syntax errors, missing files, bad paths, or config issues 7) Fix the root cause 8) When fixed, restart the service with: sudo systemctl restart claude-code (this will kill this recovery process and start a fresh session). Be thorough — do not restart until you have actually fixed the underlying issue." \
+        --dangerously-skip-permissions \
+        > "$EASYCLAW/recovery-agent.log" 2>&1 &
+
+    AGENT_PID=$!
+    echo "[$TIMESTAMP] system: Recovery agent spawned (PID $AGENT_PID) — service blocked for up to 20 min" >> "$LOG"
+
+    # Block so systemd doesn't keep restarting while recovery is in progress.
+    # The recovery agent will call `sudo systemctl restart claude-code` when done,
+    # which kills this sleep and starts a fresh session.
+    exec sleep 1200
+fi
+# ── End restart loop detection ─────────────────────────────────────────────
 
 # Kill any stale tmux session
 tmux kill-session -t "$SESSION" 2>/dev/null
