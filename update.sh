@@ -8,10 +8,11 @@
 #   1. git pull latest changes
 #   2. Copy workspace/scripts/* → ~/.easyclaw/scripts/
 #   3. Regenerate ~/claude-start.sh from template
-#   4. Update clawdy-restart in /usr/local/bin/ if changed
-#   5. Update systemd service files if changed
-#   6. Restart telegram-bot service
-#   7. Restart clawdy (via clawdy-restart) so MCP + script changes take effect
+#   4. Update clawdy-restart + clawdy-update in /usr/local/bin/ if changed
+#   5. Re-register clawdy-mcp in ~/.claude.json (ensures correct path)
+#   6. Update systemd service files if changed
+#   7. Restart telegram-bot service
+#   8. Restart clawdy (via clawdy-restart) so MCP + script changes take effect
 
 set -euo pipefail
 
@@ -61,7 +62,22 @@ for bin_script in clawdy-restart update.sh; do
 done
 echo
 
-# ── 5. Update systemd service files if changed ───────────────────────────
+# ── 5. Ensure clawdy-mcp is registered in ~/.claude.json ─────────────────
+echo "➜ Ensuring clawdy-mcp is registered in ~/.claude.json..."
+CLAUDE_JSON="$HOME/.claude.json"
+MCP_PATH="$SCRIPTS/clawdy-mcp.py"
+[ -f "$CLAUDE_JSON" ] || echo '{}' > "$CLAUDE_JSON"
+jq --arg home "$HOME" --arg mcp "$MCP_PATH" \
+    '.projects[$home].mcpServers["clawdy-mcp"] = {
+        "type": "stdio",
+        "command": "python3",
+        "args": [$mcp],
+        "env": {}
+    }' "$CLAUDE_JSON" > "$CLAUDE_JSON.tmp" && mv "$CLAUDE_JSON.tmp" "$CLAUDE_JSON"
+echo "  Registered: python3 $MCP_PATH"
+echo
+
+# ── 7. Update systemd service files if changed ───────────────────────────
 RELOAD_SERVICES=0
 for svc_template in "$REPO/services/"*.service; do
     [ -f "$svc_template" ] || continue
@@ -92,7 +108,7 @@ if [ "$RELOAD_SERVICES" = "1" ]; then
 fi
 echo
 
-# ── 6. Restart telegram-bot ───────────────────────────────────────────────
+# ── 8. Restart telegram-bot ───────────────────────────────────────────────
 echo "➜ Restarting telegram-bot..."
 if sudo systemctl restart clawdy-telegram-bot.service 2>/dev/null; then
     echo "  Restarted: clawdy-telegram-bot.service"
@@ -101,7 +117,7 @@ else
 fi
 echo
 
-# ── 7. Restart clawdy (MCP + script changes need a fresh session) ─────────
+# ── 9. Restart clawdy (MCP + script changes need a fresh session) ─────────
 echo "➜ Restarting Clawdy..."
 clawdy-restart "update.sh ran — new code deployed" "Update complete — new code is live. Continue where you left off."
 echo
