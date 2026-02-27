@@ -25,6 +25,38 @@ LOG_FILE = EASYCLAW / "telegram-bot.log"
 STOP_TYPING = EASYCLAW / "stop-typing"
 FILES_DIR = Path.home() / "telegram-files"  # overridden in main() from env
 
+# Whisper model (loaded once on first voice message, then cached)
+_whisper_model = None
+
+
+def get_whisper_model():
+    """Load the faster-whisper 'base' model on first call, then cache it."""
+    global _whisper_model
+    if _whisper_model is None:
+        try:
+            from faster_whisper import WhisperModel
+            log.info("Loading Whisper 'base' model for voice transcription...")
+            _whisper_model = WhisperModel("base", device="cpu", compute_type="int8")
+            log.info("Whisper model loaded.")
+        except Exception as e:
+            log.error(f"Failed to load Whisper model: {e}")
+    return _whisper_model
+
+
+def transcribe_voice(file_path: Path) -> str | None:
+    """Transcribe a voice/audio file using local faster-whisper. Returns text or None."""
+    model = get_whisper_model()
+    if model is None:
+        return None
+    try:
+        segments, info = model.transcribe(str(file_path), beam_size=5)
+        text = " ".join(seg.text.strip() for seg in segments).strip()
+        log.info(f"Transcribed voice ({info.language}, {info.duration:.1f}s): {text[:80]}")
+        return text if text else None
+    except Exception as e:
+        log.error(f"Transcription failed: {e}")
+        return None
+
 # Rate limiting: max 5 messages per 30 seconds per chat_id
 _rate_limit: dict[int, list[float]] = {}
 
@@ -314,12 +346,26 @@ def main():
                     if file_size and file_size > FILE_SIZE_LIMIT:
                         send_message(token, chat_id, f"⚠️ File too large ({file_size // (1024*1024)} MB). Max is 20 MB.")
                         continue
-                    send_message(token, chat_id, f"📥 Downloading {filename_hint}...")
+                    is_voice = filename_hint == "voice.ogg" or "voice" in msg
+                    if is_voice:
+                        send_message(token, chat_id, "🎙️ Transcribing voice message...")
+                    else:
+                        send_message(token, chat_id, f"📥 Downloading {filename_hint}...")
                     local_path = download_file(token, file_id, filename_hint)
                     if local_path:
-                        text = f"[File saved: {local_path}]"
-                        if caption:
-                            text += f" {caption}"
+                        if is_voice:
+                            transcribed = transcribe_voice(local_path)
+                            if transcribed:
+                                text = transcribed
+                                if caption:
+                                    text += f" {caption}"
+                            else:
+                                send_message(token, chat_id, "⚠️ Could not transcribe voice message.")
+                                continue
+                        else:
+                            text = f"[File saved: {local_path}]"
+                            if caption:
+                                text += f" {caption}"
                     else:
                         send_message(token, chat_id, "⚠️ Failed to download the file. Try again.")
                         continue
