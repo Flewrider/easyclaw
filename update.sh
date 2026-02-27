@@ -62,19 +62,27 @@ for bin_script in clawdy-restart update.sh; do
 done
 echo
 
-# ── 5. Ensure clawdy-mcp is registered in ~/.claude.json ─────────────────
+# ── 5. Ensure clawdy-mcp path is correct in ~/.claude.json ───────────────
 echo "➜ Ensuring clawdy-mcp is registered in ~/.claude.json..."
 CLAUDE_JSON="$HOME/.claude.json"
 MCP_PATH="$SCRIPTS/clawdy-mcp.py"
 [ -f "$CLAUDE_JSON" ] || echo '{}' > "$CLAUDE_JSON"
-jq --arg home "$HOME" --arg mcp "$MCP_PATH" \
-    '.projects[$home].mcpServers["clawdy-mcp"] = {
-        "type": "stdio",
-        "command": "python3",
-        "args": [$mcp],
-        "env": {}
-    }' "$CLAUDE_JSON" > "$CLAUDE_JSON.tmp" && mv "$CLAUDE_JSON.tmp" "$CLAUDE_JSON"
-echo "  Registered: python3 $MCP_PATH"
+
+if grep -q "clawdy-mcp\.py" "$CLAUDE_JSON"; then
+    # Replace any stale path — grep every line containing clawdy-mcp.py and swap it
+    sed -i "s|\"[^\"]*clawdy-mcp\.py\"|\"$MCP_PATH\"|g" "$CLAUDE_JSON"
+    echo "  Updated path → $MCP_PATH"
+else
+    # No registration found — create it
+    jq --arg home "$HOME" --arg mcp "$MCP_PATH" \
+        '.projects[$home].mcpServers["clawdy-mcp"] = {
+            "type": "stdio",
+            "command": "python3",
+            "args": [$mcp],
+            "env": {}
+        }' "$CLAUDE_JSON" > "$CLAUDE_JSON.tmp" && mv "$CLAUDE_JSON.tmp" "$CLAUDE_JSON"
+    echo "  Created registration → $MCP_PATH"
+fi
 echo
 
 # ── 7. Update systemd service files if changed ───────────────────────────
