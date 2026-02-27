@@ -23,8 +23,10 @@ CONFIG_FILE = EASYCLAW / "telegram-config.json"
 LOG_FILE = EASYCLAW / "telegram-bot.log"
 TYPING_PID_FILE = EASYCLAW / "telegram-typing.pid"
 TYPING_LOOP = EASYCLAW / "scripts" / "clawdy-typing-loop.py"
+FILES_DIR = Path.home() / "telegram-files"  # overridden in main() from env
 TMUX_SESSION = "claude"
 TMUX_WINDOW = "claude"
+FILE_SIZE_LIMIT = 20 * 1024 * 1024  # 20 MB — Telegram bot download hard limit
 
 logging.basicConfig(
     level=logging.INFO,
@@ -74,6 +76,61 @@ def tg_request(token, method, **kwargs):
 
 def send_message(token, chat_id, text, **kwargs):
     return tg_request(token, "sendMessage", chat_id=chat_id, text=text, **kwargs)
+
+
+def get_file_info(msg):
+    """Extract (file_id, filename_hint, file_size) from a message with an attachment.
+    Returns (None, None, None) if no supported file type found."""
+    if "document" in msg:
+        d = msg["document"]
+        return d["file_id"], d.get("file_name", "document"), d.get("file_size", 0)
+    if "photo" in msg:
+        # Pick the largest photo size
+        largest = max(msg["photo"], key=lambda p: p.get("file_size", 0))
+        return largest["file_id"], "photo.jpg", largest.get("file_size", 0)
+    if "audio" in msg:
+        a = msg["audio"]
+        return a["file_id"], a.get("file_name", "audio"), a.get("file_size", 0)
+    if "voice" in msg:
+        v = msg["voice"]
+        return v["file_id"], "voice.ogg", v.get("file_size", 0)
+    if "video" in msg:
+        v = msg["video"]
+        return v["file_id"], v.get("file_name", "video.mp4"), v.get("file_size", 0)
+    if "video_note" in msg:
+        return msg["video_note"]["file_id"], "video_note.mp4", msg["video_note"].get("file_size", 0)
+    if "sticker" in msg:
+        s = msg["sticker"]
+        ext = "webm" if s.get("is_video") else "webp"
+        return s["file_id"], f"sticker.{ext}", s.get("file_size", 0)
+    return None, None, None
+
+
+def download_file(token, file_id, filename_hint):
+    """Download a Telegram file to FILES_DIR. Returns local path or None on failure."""
+    FILES_DIR.mkdir(parents=True, exist_ok=True)
+    # Get file path from Telegram
+    result = tg_request(token, "getFile", file_id=file_id)
+    if not result.get("ok"):
+        log.error(f"getFile failed: {result}")
+        return None
+    file_path = result["result"]["file_path"]
+    url = f"https://api.telegram.org/file/bot{token}/{file_path}"
+    # Use timestamp prefix to avoid collisions
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    local_name = f"{timestamp}_{filename_hint}"
+    local_path = FILES_DIR / local_name
+    try:
+        r = requests.get(url, timeout=60, stream=True)
+        r.raise_for_status()
+        with open(local_path, "wb") as f:
+            for chunk in r.iter_content(chunk_size=8192):
+                f.write(chunk)
+        log.info(f"Downloaded file to {local_path}")
+        return local_path
+    except Exception as e:
+        log.error(f"File download failed: {e}")
+        return None
 
 
 def start_typing(chat_id):
@@ -149,6 +206,10 @@ def main():
     log.info("Clawdy Telegram Bot starting...")
     env = load_env()
     token = env.get("TELEGRAM_BOT_TOKEN", "")
+
+    # Set files dir from env or fall back to ~/telegram-files
+    global FILES_DIR
+    FILES_DIR = Path(env["TELEGRAM_FILES_DIR"]) if env.get("TELEGRAM_FILES_DIR") else Path.home() / "telegram-files"
     if not token or token == "your_bot_token_here":
         log.error("TELEGRAM_BOT_TOKEN not set in .env")
         sys.exit(1)
@@ -190,8 +251,30 @@ def main():
             sender = msg["from"].get("first_name", "Unknown")
             text = msg.get("text", "")
 
+            # Caption text (photos/docs can have a caption alongside the file)
+            caption = msg.get("caption", "")
+
             if not text:
-                continue
+                # Check for a supported file attachment
+                file_id, filename_hint, file_size = get_file_info(msg)
+                if file_id and chat_id in cfg["allowed_chats"]:
+                    if file_size and file_size > FILE_SIZE_LIMIT:
+                        send_message(token, chat_id, f"⚠️ File too large ({file_size // (1024*1024)} MB). Max is 20 MB.")
+                        continue
+                    send_message(token, chat_id, f"📥 Downloading {filename_hint}...")
+                    local_path = download_file(token, file_id, filename_hint)
+                    if local_path:
+                        text = f"[File saved: {local_path}]"
+                        if caption:
+                            text += f" {caption}"
+                    else:
+                        send_message(token, chat_id, "⚠️ Failed to download the file. Try again.")
+                        continue
+                elif chat_id in cfg["allowed_chats"]:
+                    send_message(token, chat_id, "⚠️ Unsupported message type.")
+                    continue
+                else:
+                    continue
 
             # Handle /allow command from allowed chats
             if text.startswith("/allow ") and chat_id in cfg["allowed_chats"]:

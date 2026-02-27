@@ -593,8 +593,9 @@ install_start_script() {
 create_workspace() {
     print_info "Creating workspace directory ~/.easyclaw/..."
     mkdir -p "${USER_HOME}/.easyclaw/scripts"
+    mkdir -p "${USER_HOME}/telegram-files"
     print_success "Workspace directory created: ${USER_HOME}/.easyclaw/"
-    log "INFO" "Created ${USER_HOME}/.easyclaw/ and scripts/"
+    log "INFO" "Created ${USER_HOME}/.easyclaw/, scripts/, and telegram-files/"
 }
 
 # Step 7c: Install scripts to ~/.easyclaw/scripts/
