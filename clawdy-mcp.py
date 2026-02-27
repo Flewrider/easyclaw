@@ -420,11 +420,7 @@ async def list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="telegram_send",
-            description=(
-                "Send a message to the user via Telegram. "
-                "By default the typing indicator keeps running (for multi-part replies). "
-                "Set end_typing=true on the final message to stop the indicator."
-            ),
+            description="Send a message to the user via Telegram. By default the typing indicator keeps running; set end_typing=true on the final message to stop it.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -455,10 +451,7 @@ async def list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="set_status",
-            description=(
-                "Set working status to 'busy' (suppresses cron interruptions) "
-                "or 'idle' (allows cron checks). Busy auto-clears after 2 hours."
-            ),
+            description="Set working status to 'busy' (suppresses cron interruptions) or 'idle' (allows cron checks). Busy auto-clears after 2 hours.",
             inputSchema={
                 "type": "object",
                 "properties": {

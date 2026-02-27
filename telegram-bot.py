@@ -97,10 +97,28 @@ def stop_typing():
             pass
         TYPING_PID_FILE.unlink(missing_ok=True)
 
+def wait_for_ready(timeout=120):
+    """Wait until the restarting flag is gone (max timeout seconds)."""
+    flag = EASYCLAW / "restarting"
+    if not flag.exists():
+        return
+    log.info("Session is restarting — waiting for it to be ready...")
+    elapsed = 0
+    while flag.exists() and elapsed < timeout:
+        time.sleep(2)
+        elapsed += 2
+    if flag.exists():
+        log.warning("Timed out waiting for restart to complete — injecting anyway")
+    else:
+        log.info(f"Session ready after {elapsed}s")
+
+
 def inject_to_claude(message_text, sender_name, chat_id):
     """Inject a message into the tmux Claude session."""
     display = f"[TELEGRAM from {sender_name}]: {message_text}"
     log.info(f"Injecting to Claude: {display[:80]}")
+
+    wait_for_ready()
 
     try:
         subprocess.run([

@@ -11,9 +11,10 @@ WORKDIR="%%HOME%%"
 CLAUDE="%%HOME%%/.local/bin/claude"
 export IS_SANDBOX=1
 
-# Reset status to idle on every restart
+# Reset status to idle on every restart; set restarting flag so bot queues messages
 mkdir -p "%%HOME%%/.easyclaw"
 echo "idle" > "%%HOME%%/.easyclaw/status"
+touch "%%HOME%%/.easyclaw/restarting"
 
 # Kill any stale tmux session
 tmux kill-session -t "$SESSION" 2>/dev/null
@@ -47,6 +48,9 @@ sleep 8
 tmux send-keys -t "$SESSION:claude" "[restart] $RESTART_MSG"
 sleep 1
 tmux send-keys -t "$SESSION:claude" "" C-m
+
+# Clear restarting flag — bot can now inject queued messages
+rm -f "%%HOME%%/.easyclaw/restarting"
 
 # Block until tmux session ends so systemd can track and restart
 while tmux has-session -t "$SESSION" 2>/dev/null; do
