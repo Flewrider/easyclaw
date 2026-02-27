@@ -363,6 +363,10 @@ def main():
             if not success:
                 stop_typing()
                 send_message(token, chat_id, "⚠️ Failed to reach Clawdy session. Is it running?")
+            else:
+                # Brief pause between consecutive messages so Claude can process
+                # each injection before the next one arrives in the tmux session.
+                time.sleep(0.2)
 
 
 if __name__ == "__main__":
