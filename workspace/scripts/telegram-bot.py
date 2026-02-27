@@ -147,17 +147,23 @@ def download_file(token, file_id, filename_hint):
         return None
 
 
-def start_typing(chat_id):
-    """Start background typing indicator thread."""
+def start_typing(chat_id, timeout=90):
+    """Start background typing indicator thread. Auto-stops after timeout seconds
+    even if no telegram_send is ever called (e.g. agent decides not to respond)."""
     global _typing_thread
     stop_typing()  # stop any existing thread first
     _stop_typing_event.clear()
 
     def _loop():
+        deadline = time.time() + timeout
         while True:
-            # Check for stop signal written by clawdy-mcp's telegram_send
+            # Stop if flag written by clawdy-mcp's telegram_send
             if STOP_TYPING.exists():
                 STOP_TYPING.unlink(missing_ok=True)
+                break
+            # Auto-stop after timeout so we don't type forever on no-reply messages
+            if time.time() >= deadline:
+                log.info("Typing indicator auto-stopped (timeout)")
                 break
             tg_request(_bot_token, "sendChatAction", chat_id=chat_id, action="typing")
             if _stop_typing_event.wait(4):
@@ -165,7 +171,7 @@ def start_typing(chat_id):
 
     _typing_thread = threading.Thread(target=_loop, daemon=True)
     _typing_thread.start()
-    log.info("Typing indicator started (thread)")
+    log.info(f"Typing indicator started (thread, timeout={timeout}s)")
 
 
 def stop_typing():
