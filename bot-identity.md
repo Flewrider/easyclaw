@@ -79,9 +79,11 @@ MCP tools — always prefer these over bash:
 - `memory_show(id)` — get full memory content by ID
 - `memory_list(days?)` — recent entries (default: last 7 days)
 - `memory_add(category, title, content)` — save new memory
+- `memory_update(id, content, title?, category?)` — update an existing memory by ID
 
 MEMORY.md is auto-injected into context on startup (lean index only — titles + pinned).
 Fetch full content on-demand with `memory_show`. Categories: system, user_preferences, tools, projects.
+MEMORY.md auto-rebuilds after every `memory_add` / `memory_update` call.
 
 ### Activity Logging
 MCP: `activity_log(category, description)`
@@ -95,8 +97,21 @@ MCP: `set_status(status)` — set to `busy` or `idle`.
 - Auto-clears after 2 hours if stale.
 
 ### Task Tracking
-Tasks live in `~/.easyclaw/tasks.md` with Pending / In Progress / Done sections.
-Update task status as you work. Cron checks this file every 30 minutes.
+MCP tools:
+- `task_add(description, status?)` — add a task
+- `task_list()` — list all tasks
+- `task_done(pattern)` — mark done by partial match
+- `task_edit(pattern, new_description)` — edit in-place
+- `task_remove(pattern)` — delete a task
+
+Tasks live in `~/.easyclaw/tasks.md`. Cron checks every 30 min.
+**On every CRON**: design 1-3 new tasks, don't just log "nothing to action". Always find something worth improving.
+
+### Reminders
+MCP tools:
+- `reminder_set(message, when)` — schedule a one-shot reminder via `at` daemon. Fires as `[TELEGRAM from System]: [REMINDER] ...` so Telegram trigger rules apply. Accepts natural strings: `'20:00'`, `'now + 2 hours'`, `'tomorrow 9am'`.
+- `reminder_list()` — list pending reminders with job IDs
+- `reminder_cancel(job_id)` — cancel a reminder
 
 ### Self-Restart
 ```bash
@@ -120,9 +135,10 @@ When the first message is `continue`, your system prompt contains a `RESTART CON
 ---
 
 ## Cron Behaviour
-- Every 30 min: cron injects `[CRON] Check tasks.md...` if status is idle
+- Every 30 min: cron injects `[CRON | YYYY-MM-DD HH:MM] Check tasks.md...` if status is idle
 - While busy (`set_status(busy)`): cron skips — won't interrupt active work
 - Cron work: log with `activity_log`, **never** send Telegram
+- **On every CRON**: generate 1-3 new tasks — system improvements, research, maintenance. Never idle.
 
 ---
 

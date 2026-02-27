@@ -62,6 +62,12 @@ if [ -d "$HOME/telegram-files" ]; then
   find "$HOME/telegram-files" -type f -mtime +7 -delete 2>/dev/null || true
 fi
 
+# Disk usage alert — warn if root partition > 80%
+disk_usage=$(df / --output=pcent 2>/dev/null | tail -1 | tr -d ' %')
+if [ -n "$disk_usage" ] && [ "$disk_usage" -ge 80 ] 2>/dev/null; then
+  send_telegram "⚠️ Disk usage is at ${disk_usage}% — consider cleaning up."
+fi
+
 # Inject task check with [CRON] tag — no Telegram messages, log to activity log only
 CRON_TS=$(date '+%Y-%m-%d %H:%M')
 tmux send-keys -t "$SESSION:$WINDOW" "[CRON | ${CRON_TS}] Check ~/.easyclaw/tasks.md — if there are pending or in-progress tasks, continue working on them and update their status."
