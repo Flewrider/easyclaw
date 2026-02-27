@@ -152,6 +152,7 @@ check_dependencies() {
         "python3:python3"
         "pip3:python3-pip"
         "tmux:tmux"
+        "ffmpeg:ffmpeg"
     )
 
     local apt_missing=()
@@ -546,9 +547,9 @@ install_mcp_server() {
     # Install Python packages system-wide
     # --break-system-packages: required on Ubuntu 22.04+ (PEP 668)
     # --ignore-installed: skip uninstall step, avoiding RECORD file errors on apt-managed packages
-    print_info "Installing Python dependencies (mcp, requests)..."
-    if python3 -m pip install --quiet --break-system-packages --ignore-installed mcp requests 2>&1 | tee -a "$LOG_FILE"; then
-        log "INFO" "Python packages installed: mcp, requests"
+    print_info "Installing Python dependencies (mcp, requests, faster-whisper)..."
+    if python3 -m pip install --quiet --break-system-packages --ignore-installed mcp requests faster-whisper 2>&1 | tee -a "$LOG_FILE"; then
+        log "INFO" "Python packages installed: mcp, requests, faster-whisper"
         print_success "Python packages installed"
     else
         print_warn "pip install failed — MCP server may not work"
