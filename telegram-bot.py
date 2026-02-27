@@ -24,6 +24,9 @@ CONFIG_FILE = EASYCLAW / "telegram-config.json"
 LOG_FILE = EASYCLAW / "telegram-bot.log"
 FILES_DIR = Path.home() / "telegram-files"  # overridden in main() from env
 
+# Rate limiting: max 5 messages per 30 seconds per chat_id
+_rate_limit: dict[int, list[float]] = {}
+
 # Typing indicator state (in-process thread)
 _typing_thread: threading.Thread | None = None
 _stop_typing_event = threading.Event()
@@ -320,6 +323,15 @@ def main():
                 continue
 
             log.info(f"Message from {sender} ({chat_id}): {text[:80]}")
+
+            # Rate limiting: max 5 messages per 30 seconds per chat_id
+            now = time.time()
+            _rate_limit.setdefault(chat_id, [])
+            _rate_limit[chat_id] = [t for t in _rate_limit[chat_id] if now - t < 30]
+            if len(_rate_limit[chat_id]) >= 5:
+                send_message(token, chat_id, "⚠️ Slow down — I can only handle 5 messages per 30 seconds.")
+                continue
+            _rate_limit[chat_id].append(now)
 
             # Start typing BEFORE injecting so stop_typing always has a PID to kill
             start_typing(chat_id)

@@ -8,6 +8,7 @@ Tools exposed:
   - memory_show(id)
   - memory_list(days?)
   - telegram_send(message, end_typing?)
+  - telegram_send_file(file_path, caption?)
   - activity_log(category, description)
   - set_status(status)
   - task_add(description, status?)
@@ -231,6 +232,38 @@ def impl_telegram_send(message: str, end_typing: bool = False) -> str:
 
     sent_info = f"{len(message)} chars" if len(chunks) == 1 else f"{len(message)} chars in {len(chunks)} parts"
     return f"Sent ({sent_info}). Typing indicator: {'stopped' if end_typing else 'still running'}."
+
+
+def impl_telegram_send_file(file_path: str, caption: str | None = None) -> str:
+    import requests  # local import — only needed if telegram is used
+    path = Path(file_path)
+    if not path.exists():
+        return f"File not found: {file_path}"
+    env = load_env()
+    token = env.get("TELEGRAM_BOT_TOKEN", "")
+    if not token or token == "your_bot_token_here":
+        return "TELEGRAM_BOT_TOKEN not configured."
+    chat_id = get_telegram_chat_id()
+    if not chat_id:
+        return "No Telegram chat ID configured. Send a message to the bot first."
+    try:
+        with open(path, "rb") as f:
+            data: dict[str, Any] = {"chat_id": chat_id}
+            if caption:
+                data["caption"] = caption
+                data["parse_mode"] = "Markdown"
+            r = requests.post(
+                f"https://api.telegram.org/bot{token}/sendDocument",
+                data=data,
+                files={"document": (path.name, f)},
+                timeout=60,
+            )
+        result = r.json()
+        if result.get("ok"):
+            return f"File sent: {path.name} ({path.stat().st_size} bytes)"
+        return f"Failed to send file: {result}"
+    except Exception as e:
+        return f"Error sending file: {e}"
 
 
 def impl_activity_log(category: str, description: str) -> str:
@@ -557,6 +590,24 @@ async def list_tools() -> list[types.Tool]:
             },
         ),
         types.Tool(
+            name="telegram_send_file",
+            description="Send a file to the user via Telegram's sendDocument API.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "Absolute path to the file on disk",
+                    },
+                    "caption": {
+                        "type": "string",
+                        "description": "Optional caption (Markdown supported)",
+                    },
+                },
+                "required": ["file_path"],
+            },
+        ),
+        types.Tool(
             name="activity_log",
             description="Log an activity to the activity log (appears in optional daily briefings).",
             inputSchema={
@@ -707,6 +758,10 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextCont
         elif name == "telegram_send":
             result = impl_telegram_send(
                 arguments["message"], bool(arguments.get("end_typing", False))
+            )
+        elif name == "telegram_send_file":
+            result = impl_telegram_send_file(
+                arguments["file_path"], arguments.get("caption")
             )
         elif name == "activity_log":
             result = impl_activity_log(arguments["category"], arguments["description"])
