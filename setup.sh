@@ -639,14 +639,18 @@ install_scripts() {
         fi
     done
 
-    # Install clawdy-restart to /usr/local/bin so it's on PATH
-    if [ -f "$SCRIPT_DIR/clawdy-restart" ]; then
-        cp "$SCRIPT_DIR/clawdy-restart" /usr/local/bin/clawdy-restart
-        chmod +x /usr/local/bin/clawdy-restart
-        print_success "Installed clawdy-restart -> /usr/local/bin/"
-    else
-        print_warn "clawdy-restart not found in $SCRIPT_DIR — skipping"
-    fi
+    # Install clawdy-restart and clawdy-update to /usr/local/bin so they're on PATH
+    for bin_script in clawdy-restart update.sh; do
+        dest_name="${bin_script/update.sh/clawdy-update}"
+        src="$SCRIPT_DIR/$bin_script"
+        if [ -f "$src" ]; then
+            sudo cp "$src" "/usr/local/bin/$dest_name"
+            sudo chmod +x "/usr/local/bin/$dest_name"
+            print_success "Installed $dest_name -> /usr/local/bin/"
+        else
+            print_warn "$bin_script not found in $SCRIPT_DIR — skipping $dest_name"
+        fi
+    done
 
     # Make all scripts executable
     chmod +x "${USER_HOME}/.easyclaw/scripts/"*.sh 2>/dev/null || true

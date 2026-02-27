@@ -44,18 +44,22 @@ chmod +x "$HOME/claude-start.sh"
 echo "  Written: $HOME/claude-start.sh"
 echo
 
-# ── 4. Update clawdy-restart if changed ──────────────────────────────────
-if [ -f "$REPO/clawdy-restart" ]; then
-    if ! diff -q "$REPO/clawdy-restart" /usr/local/bin/clawdy-restart &>/dev/null 2>&1; then
-        echo "➜ Updating clawdy-restart..."
-        sudo cp "$REPO/clawdy-restart" /usr/local/bin/clawdy-restart
-        sudo chmod +x /usr/local/bin/clawdy-restart
-        echo "  Updated: /usr/local/bin/clawdy-restart"
+# ── 4. Update clawdy-restart and clawdy-update in /usr/local/bin/ ────────
+for bin_script in clawdy-restart update.sh; do
+    dest_name="${bin_script/update.sh/clawdy-update}"  # rename update.sh → clawdy-update
+    src="$REPO/$bin_script"
+    dest="/usr/local/bin/$dest_name"
+    [ -f "$src" ] || continue
+    if ! diff -q "$src" "$dest" &>/dev/null 2>&1; then
+        echo "➜ Updating $dest_name..."
+        sudo cp "$src" "$dest"
+        sudo chmod +x "$dest"
+        echo "  Updated: $dest"
     else
-        echo "➜ clawdy-restart unchanged — skipping"
+        echo "➜ $dest_name unchanged — skipping"
     fi
-    echo
-fi
+done
+echo
 
 # ── 5. Update systemd service files if changed ───────────────────────────
 RELOAD_SERVICES=0
