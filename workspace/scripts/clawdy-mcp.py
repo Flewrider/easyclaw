@@ -471,7 +471,13 @@ def _build_agent_cmd(
     allowed_tools: list[str] | None,
     session_id: str | None = None,
 ) -> list[str]:
-    cmd = ["claude", "-p", prompt, "--output-format", "json", "--model", model]
+    # Use a dedicated project-dir for subagents so their sessions are stored
+    # separately from the main Clawdy session — prevents --continue on restart
+    # from accidentally resuming a subagent session instead of the main one.
+    subagent_dir = EASYCLAW / "subagent-sessions"
+    subagent_dir.mkdir(exist_ok=True)
+    cmd = ["claude", "-p", prompt, "--output-format", "json", "--model", model,
+           "--project-dir", str(subagent_dir)]
     if session_id:
         cmd += ["--resume", session_id]
     if allowed_tools is not None:
