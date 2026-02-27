@@ -71,14 +71,20 @@ def save_config(cfg):
     CONFIG_FILE.chmod(0o600)
 
 
-def tg_request(token, method, **kwargs):
+def tg_request(token, method, _retries=3, **kwargs):
     url = f"https://api.telegram.org/bot{token}/{method}"
-    try:
-        r = requests.post(url, json=kwargs, timeout=35)
-        return r.json()
-    except Exception as e:
-        log.error(f"Telegram API error ({method}): {e}")
-        return {"ok": False}
+    for attempt in range(_retries):
+        try:
+            r = requests.post(url, json=kwargs, timeout=35)
+            return r.json()
+        except Exception as e:
+            if attempt < _retries - 1:
+                delay = 2 ** attempt  # 1s, 2s, 4s
+                log.warning(f"Telegram API error ({method}), retrying in {delay}s: {e}")
+                time.sleep(delay)
+            else:
+                log.error(f"Telegram API error ({method}) after {_retries} attempts: {e}")
+    return {"ok": False}
 
 
 def send_message(token, chat_id, text, **kwargs):
@@ -204,12 +210,18 @@ def get_updates(token, offset=None):
     if offset:
         params["offset"] = offset
     url = f"https://api.telegram.org/bot{token}/getUpdates"
-    try:
-        r = requests.get(url, params=params, timeout=40)
-        return r.json()
-    except Exception as e:
-        log.error(f"getUpdates error: {e}")
-        return {"ok": False, "result": []}
+    for attempt in range(3):
+        try:
+            r = requests.get(url, params=params, timeout=40)
+            return r.json()
+        except Exception as e:
+            if attempt < 2:
+                delay = 2 ** attempt
+                log.warning(f"getUpdates error, retrying in {delay}s: {e}")
+                time.sleep(delay)
+            else:
+                log.error(f"getUpdates error after 3 attempts: {e}")
+    return {"ok": False, "result": []}
 
 
 def main():
