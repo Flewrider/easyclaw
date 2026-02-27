@@ -363,9 +363,9 @@ def main():
                                 send_message(token, chat_id, "⚠️ Could not transcribe voice message.")
                                 continue
                         else:
-                            text = f"[File saved: {local_path}]"
+                            text = f"[File received from Telegram — use Read tool to view: {local_path}]"
                             if caption:
-                                text += f" {caption}"
+                                text += f" Caption: {caption}"
                     else:
                         send_message(token, chat_id, "⚠️ Failed to download the file. Try again.")
                         continue
