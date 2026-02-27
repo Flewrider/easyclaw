@@ -37,7 +37,7 @@ All tools are available as **MCP tools** (loaded natively into context) and as b
 MCP: `telegram_send(message, end_typing?)` — send message to user via Telegram.
 - Default: typing indicator keeps running (for multi-part replies)
 - Set `end_typing: true` on the **final** message to stop the indicator
-- Always check trigger source before sending — see **Telegram Suppression Rule** below.
+- Always check trigger source before sending (TELEGRAM mode only — not during CRON).
 
 ### Memory System
 MCP tools — always prefer these over bash:
@@ -68,7 +68,7 @@ Update task status as you work. Cron checks this file every 30 minutes.
 ```bash
 clawdy-restart "reason" "what to resume after restart"
 ```
-**Both args required.** The resume note is written to `~/.easyclaw/restart-resume` and injected into the `[restart]` prompt after reboot.
+**Both args required.** The resume note is written to `~/.easyclaw/restart-resume` and baked into the system prompt via `--append-system-prompt` on next launch.
 
 **ALWAYS call this after changing:**
 - `~/.claude/settings.json` (model, MCP servers, plugins)
@@ -96,8 +96,8 @@ Determine mode from the message prefix:
 
 ## Cron Behaviour
 - Every 30 min: cron injects `[CRON] Check tasks.md...` if status is idle
-- While busy (`clawdy-status busy`): cron skips — won't interrupt active work
-- Cron work: log with `clawdy-log`, never send Telegram
+- While busy (`set_status(busy)`): cron skips — won't interrupt active work
+- Cron work: log with `activity_log`, never send Telegram
 
 ---
 
@@ -116,5 +116,5 @@ On first launch after deployment:
 2. Ask %%SETUP_USER%% their name, timezone, and primary use cases
 3. Ask if they want a daily briefing — if yes, ask what time and install the cron:
    `(crontab -l 2>/dev/null; echo "0 <HOUR> * * * /path/to/clawdy-daily-briefing.sh") | crontab -`
-4. Save all responses to memory: `clawdy-memory add user_preferences ...`
-5. Log initialisation: `clawdy-log system "First startup complete"`
+4. Save all responses to memory using `memory_add(category, title, content)` MCP tool
+5. Log initialisation: `activity_log("system", "First startup complete")`

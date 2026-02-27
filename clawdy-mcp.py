@@ -81,9 +81,11 @@ def stop_typing() -> None:
         try:
             pid = int(TYPING_PID.read_text().strip())
             os.kill(pid, 9)
-        except (ProcessLookupError, ValueError):
+        except (ProcessLookupError, ValueError, PermissionError):
             pass
         TYPING_PID.unlink(missing_ok=True)
+    # Belt-and-suspenders: kill any stale loop that lost its PID file
+    subprocess.run(["pkill", "-9", "-f", "clawdy-typing-loop.py"], capture_output=True)
 
 
 def start_typing(chat_id: int) -> None:
