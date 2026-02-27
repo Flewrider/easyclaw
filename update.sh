@@ -16,7 +16,17 @@
 
 set -euo pipefail
 
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# When installed as /usr/local/bin/clawdy-update, SCRIPT_DIR is /usr/local/bin (not a git repo).
+# Fall back to the stored repo path written by the previous update run.
+if git -C "$SCRIPT_DIR" rev-parse --git-dir &>/dev/null 2>&1; then
+    REPO="$SCRIPT_DIR"
+elif [ -f "$HOME/.easyclaw/repo-path" ]; then
+    REPO="$(cat "$HOME/.easyclaw/repo-path")"
+else
+    echo "Error: Cannot find easyclaw repo. Run update.sh directly from the repo first."
+    exit 1
+fi
 EASYCLAW="$HOME/.easyclaw"
 SCRIPTS="$EASYCLAW/scripts"
 
@@ -29,6 +39,8 @@ echo
 echo "➜ Pulling latest changes..."
 git -C "$REPO" checkout main
 git -C "$REPO" pull
+# Store repo path so clawdy-update (in /usr/local/bin) can find it next run
+echo "$REPO" > "$HOME/.easyclaw/repo-path"
 echo
 
 # ── 2. Sync workspace/scripts/ → ~/.easyclaw/scripts/ ────────────────────

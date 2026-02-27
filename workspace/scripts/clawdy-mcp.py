@@ -19,6 +19,9 @@ Tools exposed:
   - memory_update(id, content, title?, category?)
   - spawn_agent(prompt, model?, allowed_tools?)
   - converse_with_agent(session_id, prompt, model?, allowed_tools?)
+  - reminder_set(message, when)
+  - reminder_list()
+  - reminder_cancel(job_id)
 
 Run via stdio — registered in ~/.claude/settings.json.
 Install: pip install mcp
@@ -52,6 +55,7 @@ STATUS_FILE   = EASYCLAW / "status"
 TASKS_FILE    = EASYCLAW / "tasks.md"
 AGENT_LOG     = EASYCLAW / "agent-sessions.jsonl"
 STOP_TYPING   = EASYCLAW / "stop-typing"
+REMINDERS_FILE = EASYCLAW / "reminders.json"
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -579,6 +583,108 @@ async def impl_converse_with_agent(
         return f"Failed to parse agent output: {e}\nRaw: {stdout.decode()[:500]}"
 
 
+# ── Reminder tools ────────────────────────────────────────────────────────────
+
+def impl_reminder_set(message: str, when: str) -> str:
+    """Schedule a one-shot reminder using the system `at` daemon."""
+    import re
+    session = "claude"
+    window  = "claude"
+    safe_msg = message.replace("'", "'\\''")
+    script = (
+        f"#!/bin/bash\n"
+        f"tmux send-keys -t {session}:{window} '[REMINDER]: {safe_msg}'\n"
+        f"sleep 0.3\n"
+        f"tmux send-keys -t {session}:{window} '' Enter\n"
+    )
+    try:
+        result = subprocess.run(
+            ["at", when],
+            input=script,
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError:
+        return "Error: `at` command not found. Install with: sudo apt-get install at"
+
+    if result.returncode != 0:
+        return f"Error scheduling reminder: {result.stderr.strip()}"
+
+    job_id = None
+    scheduled_at = ""
+    for line in result.stderr.splitlines():
+        m = re.search(r"job (\d+)", line)
+        if m:
+            job_id = int(m.group(1))
+        m2 = re.search(r"at (.+)", line)
+        if m2:
+            scheduled_at = m2.group(1).strip()
+
+    reminders: list = []
+    if REMINDERS_FILE.exists():
+        try:
+            reminders = json.loads(REMINDERS_FILE.read_text())
+        except Exception:
+            pass
+    reminders.append({
+        "job_id": job_id,
+        "message": message,
+        "when": when,
+        "scheduled_at": scheduled_at,
+        "created_at": datetime.now().isoformat(sep=" ", timespec="seconds"),
+    })
+    REMINDERS_FILE.write_text(json.dumps(reminders, indent=2))
+
+    return f"Reminder set (job {job_id}): '{message}' — scheduled at {scheduled_at}"
+
+
+def impl_reminder_list() -> str:
+    """List all pending reminders (cross-referenced with atq)."""
+    atq = subprocess.run(["atq"], capture_output=True, text=True)
+    active_jobs: set[int] = set()
+    for line in atq.stdout.splitlines():
+        parts = line.split()
+        if parts:
+            try:
+                active_jobs.add(int(parts[0]))
+            except ValueError:
+                pass
+
+    if not REMINDERS_FILE.exists():
+        return "No reminders scheduled."
+
+    try:
+        reminders = json.loads(REMINDERS_FILE.read_text())
+    except Exception:
+        return "Error reading reminders file."
+
+    active = [r for r in reminders if r.get("job_id") in active_jobs]
+    if not active:
+        return "No pending reminders."
+
+    lines = [f"Pending reminders ({len(active)}):"]
+    for r in active:
+        lines.append(f"  [{r['job_id']}] {r['scheduled_at']} — {r['message']}")
+    return "\n".join(lines)
+
+
+def impl_reminder_cancel(job_id: int) -> str:
+    """Cancel a pending reminder by its at job ID."""
+    result = subprocess.run(["atrm", str(job_id)], capture_output=True, text=True)
+    if result.returncode != 0:
+        return f"Error cancelling job {job_id}: {result.stderr.strip()}"
+
+    if REMINDERS_FILE.exists():
+        try:
+            reminders = json.loads(REMINDERS_FILE.read_text())
+            reminders = [r for r in reminders if r.get("job_id") != job_id]
+            REMINDERS_FILE.write_text(json.dumps(reminders, indent=2))
+        except Exception:
+            pass
+
+    return f"Reminder {job_id} cancelled."
+
+
 # ── MCP Server ────────────────────────────────────────────────────────────────
 
 server = Server("clawdy-mcp")
@@ -810,6 +916,45 @@ async def list_tools() -> list[types.Tool]:
             },
         ),
         types.Tool(
+            name="reminder_set",
+            description=(
+                "Schedule a one-shot reminder that will be injected into your session at the specified time. "
+                "Use this instead of task_add when you need something triggered at a specific time. "
+                "`when` accepts natural `at`-style strings: '20:00', '8pm', 'now + 2 hours', "
+                "'now + 30 minutes', 'tomorrow 9am', '2026-03-01 14:00'."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "message": {
+                        "type": "string",
+                        "description": "The reminder text that will be injected as [REMINDER]: <message>",
+                    },
+                    "when": {
+                        "type": "string",
+                        "description": "When to fire — e.g. '20:00', 'now + 2 hours', 'tomorrow 9am'",
+                    },
+                },
+                "required": ["message", "when"],
+            },
+        ),
+        types.Tool(
+            name="reminder_list",
+            description="List all pending scheduled reminders.",
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        types.Tool(
+            name="reminder_cancel",
+            description="Cancel a pending reminder by its job ID (from reminder_list).",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "job_id": {"type": "integer", "description": "The at job ID to cancel"},
+                },
+                "required": ["job_id"],
+            },
+        ),
+        types.Tool(
             name="converse_with_agent",
             description=(
                 "Send a follow-up prompt to a previously spawned headless agent session. "
@@ -896,6 +1041,12 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextCont
                 arguments.get("model", "claude-haiku-4-5-20251001"),
                 arguments.get("allowed_tools"),
             )
+        elif name == "reminder_set":
+            result = impl_reminder_set(arguments["message"], arguments["when"])
+        elif name == "reminder_list":
+            result = impl_reminder_list()
+        elif name == "reminder_cancel":
+            result = impl_reminder_cancel(int(arguments["job_id"]))
         else:
             result = f"Unknown tool: {name}"
     except Exception as e:
