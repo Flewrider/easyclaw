@@ -593,7 +593,7 @@ def impl_reminder_set(message: str, when: str) -> str:
     safe_msg = message.replace("'", "'\\''")
     script = (
         f"#!/bin/bash\n"
-        f"tmux send-keys -t {session}:{window} '[REMINDER]: {safe_msg}'\n"
+        f"tmux send-keys -t {session}:{window} '[TELEGRAM from System]: [REMINDER] {safe_msg}'\n"
         f"sleep 0.3\n"
         f"tmux send-keys -t {session}:{window} '' Enter\n"
     )
