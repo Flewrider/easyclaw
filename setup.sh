@@ -421,7 +421,23 @@ collect_config() {
                     TELEGRAM_TOKEN="$token"
                 fi
             else
-                TELEGRAM_TOKEN="$token"
+                # Validate against Telegram API before accepting
+                print_info "Validating token with Telegram API..."
+                local api_resp
+                api_resp=$(curl -sf --max-time 10 "https://api.telegram.org/bot${token}/getMe" 2>/dev/null || echo "")
+                if [ -n "$api_resp" ] && echo "$api_resp" | jq -e '.ok == true' &>/dev/null; then
+                    local bot_username
+                    bot_username=$(echo "$api_resp" | jq -r '.result.username // "unknown"')
+                    print_success "Token valid — bot: @${bot_username}"
+                    log "INFO" "Telegram token validated: @${bot_username}"
+                    TELEGRAM_TOKEN="$token"
+                else
+                    print_warn "Telegram API rejected the token (check it's correct and the bot exists)"
+                    log "WARN" "Telegram getMe failed for provided token"
+                    if confirm "Use anyway?"; then
+                        TELEGRAM_TOKEN="$token"
+                    fi
+                fi
             fi
         else
             TELEGRAM_TOKEN="skip"  # sentinel so we don't re-ask on resume
