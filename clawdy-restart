@@ -17,7 +17,20 @@ RESUME_FILE="$HOME/.easyclaw/restart-resume"
 TIMESTAMP=$(date '+%Y-%m-%d %H:%M')
 
 mkdir -p "$HOME/.easyclaw"
-echo "$RESUME" > "$RESUME_FILE"
+
+# Build mini-briefing: recent activity + pending tasks
+RECENT_ACTIVITY=$(tail -3 "$LOG_FILE" 2>/dev/null | sed 's/^/  /' || echo "  (none)")
+PENDING_TASKS=$(grep '^\[Pending\]' "$HOME/.easyclaw/tasks.md" 2>/dev/null | head -3 | sed 's/^/  /' || echo "  (none)")
+
+cat > "$RESUME_FILE" <<RESUME_EOF
+$RESUME
+
+Recent activity:
+$RECENT_ACTIVITY
+
+Pending tasks:
+$PENDING_TASKS
+RESUME_EOF
 
 echo "[$TIMESTAMP] system: Restarting — $REASON" >> "$LOG_FILE"
 echo "Restarting claude-code service (reason: $REASON)..."

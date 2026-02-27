@@ -89,6 +89,63 @@ def db_connect() -> sqlite3.Connection:
     return conn
 
 
+MEMORY_MD = HOME / ".claude" / "projects" / "-home-ben" / "memory" / "MEMORY.md"
+
+
+def rebuild_memory_md() -> None:
+    """Regenerate MEMORY.md index from the SQLite db. Called after add/update."""
+    if not MEMORY_DB.exists():
+        return
+    try:
+        conn = db_connect()
+        now = datetime.now()
+        month_ago = (now - timedelta(days=30)).isoformat(sep=" ", timespec="seconds")
+        total = conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
+        this_month = conn.execute(
+            "SELECT COUNT(*) FROM memories WHERE created_at >= ?", (month_ago,)
+        ).fetchone()[0]
+        categories = conn.execute(
+            "SELECT category, COUNT(*), MAX(date(updated_at)) FROM memories "
+            "GROUP BY category ORDER BY MAX(updated_at) DESC"
+        ).fetchall()
+        pinned = conn.execute(
+            "SELECT id, category, title FROM memories "
+            "WHERE importance >= 8 ORDER BY importance DESC, updated_at DESC"
+        ).fetchall()
+        conn.close()
+
+        lines = [
+            "# Clawdy Memory System",
+            f"*{now.strftime('%Y-%m-%d %H:%M')} | {total} total memories | {this_month} this month*",
+            "",
+            "## How to use",
+            "Memory content is NOT stored here to keep context lean.",
+            "Fetch memories on demand with:",
+            "- `clawdy-memory search <query>` — full-text search across all memories",
+            "- `clawdy-memory show <id>` — get full content by ID",
+            "- `clawdy-memory list --days 7` — recent entries",
+            "- `clawdy-memory add <category> <title> <content>` — save new memory",
+            "",
+            "## Memory Index",
+            "| Category | Count | Last updated |",
+            "|----------|-------|--------------|",
+        ]
+        for cat, cnt, last in categories:
+            lines.append(f"| {cat} | {cnt} | {last} |")
+        lines += [
+            "",
+            "## Pinned (importance ≥ 8) — titles only, use `show <id>` for content",
+        ]
+        for mid, cat, title in pinned:
+            lines.append(f"- [{mid}] `{cat}` **{title}**")
+        lines.append("")
+
+        MEMORY_MD.parent.mkdir(parents=True, exist_ok=True)
+        MEMORY_MD.write_text("\n".join(lines))
+    except Exception:
+        pass  # non-fatal
+
+
 # ── Tool implementations ──────────────────────────────────────────────────────
 
 def impl_memory_search(query: str) -> str:
@@ -135,11 +192,7 @@ def impl_memory_add(category: str, title: str, content: str) -> str:
         )
         row_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
         conn.commit()
-    # Rebuild MEMORY.md
-    rebuild_script = HOME / ".claude" / "memory" / "clawdy-memory.py"
-    if rebuild_script.exists():
-        subprocess.run([sys.executable, str(rebuild_script), "rebuild-md"],
-                       capture_output=True)
+    rebuild_memory_md()
     return f"Memory saved (id: {row_id}): [{category}] {title}"
 
 
@@ -430,9 +483,7 @@ def impl_memory_update(
         values.append(memory_id)
         conn.execute(f"UPDATE memories SET {', '.join(fields)} WHERE id = ?", values)
         conn.commit()
-    rebuild_script = HOME / ".claude" / "memory" / "clawdy-memory.py"
-    if rebuild_script.exists():
-        subprocess.run([sys.executable, str(rebuild_script), "rebuild-md"], capture_output=True)
+    rebuild_memory_md()
     return f"Memory {memory_id} updated."
 
 

@@ -63,6 +63,7 @@ if [ -d "$HOME/telegram-files" ]; then
 fi
 
 # Inject task check with [CRON] tag — no Telegram messages, log to activity log only
-tmux send-keys -t "$SESSION:$WINDOW" "[CRON] Check ~/.easyclaw/tasks.md — if there are pending or in-progress tasks, continue working on them and update their status."
+CRON_TS=$(date '+%Y-%m-%d %H:%M')
+tmux send-keys -t "$SESSION:$WINDOW" "[CRON | ${CRON_TS}] Check ~/.easyclaw/tasks.md — if there are pending or in-progress tasks, continue working on them and update their status."
 sleep 1
 tmux send-keys -t "$SESSION:$WINDOW" "" Enter
