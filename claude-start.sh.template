@@ -29,9 +29,9 @@ tmux new-session -d -s "$SESSION" -c "$WORKDIR" -n "claude" \
     else \
       MSG=\"you crashed. find out why and fix the issue then continue where you left off\"; \
     fi; \
-    $CLAUDE \"/remote-control\" --continue --dangerously-skip-permissions --chrome \
+    $CLAUDE \"/remote-control\" --continue --dangerously-skip-permissions \
       --append-system-prompt \"RESTART CONTEXT: \$MSG\" \
-    || $CLAUDE \"/remote-control\" --dangerously-skip-permissions --chrome \
+    || $CLAUDE \"/remote-control\" --dangerously-skip-permissions \
       --append-system-prompt \"RESTART CONTEXT: \$MSG\"; \
     echo '[claude exited — restarting in 3s...]'; sleep 3; \
   done"
