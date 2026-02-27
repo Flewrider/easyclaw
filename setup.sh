@@ -648,16 +648,8 @@ install_scripts() {
     print_success "Crontab updated: cron check every 30 min"
     log "INFO" "Crontab: cron check every 30 min"
 
-    # Set up daily briefing cron if the script was installed
-    if [ -f "${USER_HOME}/.easyclaw/scripts/clawdy-daily-briefing.sh" ]; then
-        local tmp_briefing; tmp_briefing=$(mktemp)
-        crontab -l 2>/dev/null | grep -v "clawdy-daily-briefing" > "$tmp_briefing" || true
-        echo "0 8 * * * ${USER_HOME}/.easyclaw/scripts/clawdy-daily-briefing.sh" >> "$tmp_briefing"
-        crontab "$tmp_briefing"
-        rm -f "$tmp_briefing"
-        print_success "Crontab updated: daily briefing at 8am"
-        log "INFO" "Crontab: daily briefing at 8am"
-    fi
+    # Note: daily briefing cron is NOT added here — it's opt-in, set up by the agent
+    # on first startup if the user wants it.
 
     print_success "Scripts installed"
 }
