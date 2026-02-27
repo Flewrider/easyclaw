@@ -27,6 +27,7 @@ echo
 
 # ── 1. Pull latest ────────────────────────────────────────────────────────
 echo "➜ Pulling latest changes..."
+git -C "$REPO" checkout main
 git -C "$REPO" pull
 echo
 
