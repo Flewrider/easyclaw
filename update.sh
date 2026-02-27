@@ -119,6 +119,10 @@ echo
 
 # ── 8. Restart telegram-bot ───────────────────────────────────────────────
 echo "➜ Restarting telegram-bot..."
+# Kill any stray telegram-bot.py processes not managed by systemd
+# (can happen after manual starts or workspace-path transitions)
+pkill -f "telegram-bot.py" 2>/dev/null && echo "  Killed stray telegram-bot.py processes" || true
+sleep 1
 if sudo systemctl restart clawdy-telegram-bot.service 2>/dev/null; then
     echo "  Restarted: clawdy-telegram-bot.service"
 else
