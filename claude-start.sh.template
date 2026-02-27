@@ -11,11 +11,8 @@ WORKDIR="%%HOME%%"
 CLAUDE="%%HOME%%/.local/bin/claude"
 export IS_SANDBOX=1
 
-# Reset status; ensure restarting flag is set (clawdy-restart sets it before service
-# restart, but this covers first boot and edge cases)
 mkdir -p "%%HOME%%/.easyclaw"
 echo "idle" > "%%HOME%%/.easyclaw/status"
-touch "%%HOME%%/.easyclaw/restarting"
 
 # Kill any stale tmux session
 tmux kill-session -t "$SESSION" 2>/dev/null
@@ -47,10 +44,6 @@ sleep 15
 tmux send-keys -t "$SESSION:claude" "continue"
 sleep 1
 tmux send-keys -t "$SESSION:claude" "" C-m
-sleep 2
-
-# Clear restarting flag — bot can now inject queued Telegram messages
-rm -f "%%HOME%%/.easyclaw/restarting"
 
 # Block until tmux session ends so systemd can track and restart
 while tmux has-session -t "$SESSION" 2>/dev/null; do

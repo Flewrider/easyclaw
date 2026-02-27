@@ -97,42 +97,10 @@ def stop_typing():
             pass
         TYPING_PID_FILE.unlink(missing_ok=True)
 
-_crash_warned = False
-
-
-def wait_for_ready(timeout=120):
-    """Wait until the restarting flag clears. Returns True if ready, False if timed out."""
-    flag = EASYCLAW / "restarting"
-    if not flag.exists():
-        return True
-    log.info("Session is restarting — waiting for it to be ready...")
-    elapsed = 0
-    while flag.exists() and elapsed < timeout:
-        time.sleep(2)
-        elapsed += 2
-    if flag.exists():
-        log.warning("Timed out waiting for restart to complete")
-        return False
-    log.info(f"Session ready after {elapsed}s")
-    return True
-
-
-def send_crash_warning(token, chat_id):
-    send_message(token, chat_id, "⚠️ Session appears stuck or crashed — please check the VPS.")
-    log.warning("Crash warning sent to user")
-
-
-def inject_to_claude(message_text, sender_name, chat_id, token=""):
+def inject_to_claude(message_text, sender_name):
     """Inject a message into the tmux Claude session."""
-    global _crash_warned
     display = f"[TELEGRAM from {sender_name}]: {message_text}"
     log.info(f"Injecting to Claude: {display[:80]}")
-
-    ready = wait_for_ready()
-    if not ready and not _crash_warned and token:
-        send_crash_warning(token, chat_id)
-        _crash_warned = True
-
     try:
         subprocess.run([
             "tmux", "send-keys", "-t", f"{TMUX_SESSION}:{TMUX_WINDOW}",
@@ -143,7 +111,6 @@ def inject_to_claude(message_text, sender_name, chat_id, token=""):
             "tmux", "send-keys", "-t", f"{TMUX_SESSION}:{TMUX_WINDOW}",
             "", "Enter"
         ], check=True)
-        _crash_warned = False  # reset on successful inject
         return True
     except subprocess.CalledProcessError as e:
         log.error(f"Failed to inject to tmux: {e}")
@@ -261,7 +228,7 @@ def main():
             log.info(f"Message from {sender} ({chat_id}): {text[:80]}")
 
             # Inject into Claude tmux session
-            success = inject_to_claude(text, sender, chat_id, token)
+            success = inject_to_claude(text, sender)
             if not success:
                 send_message(token, chat_id, "⚠️ Failed to reach Clawdy session. Is it running?")
             else:

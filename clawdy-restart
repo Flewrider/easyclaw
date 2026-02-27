@@ -19,11 +19,6 @@ TIMESTAMP=$(date '+%Y-%m-%d %H:%M')
 mkdir -p "$HOME/.easyclaw"
 echo "$RESUME" > "$RESUME_FILE"
 
-# Set restarting flag BEFORE the service restarts — prevents the bot from
-# injecting queued messages during the gap between old service stopping and
-# claude-start.sh running (which is where the flag was previously set too late).
-touch "$HOME/.easyclaw/restarting"
-
 echo "[$TIMESTAMP] system: Restarting — $REASON" >> "$LOG_FILE"
 echo "Restarting claude-code service (reason: $REASON)..."
 sudo systemctl restart claude-code.service
