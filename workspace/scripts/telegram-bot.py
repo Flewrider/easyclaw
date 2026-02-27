@@ -277,6 +277,12 @@ def main():
             time.sleep(5)
             continue
 
+        # Collect validated messages from this polling batch, grouped by chat.
+        # Multiple parts of a long Telegram message arrive in the same batch —
+        # combining them into one injection avoids the Enter-key-dropped race
+        # condition where part 2 is typed while Claude is still processing part 1.
+        to_inject = {}  # chat_id -> {"sender": str, "texts": [str]}
+
         for update in data.get("result", []):
             offset = update["update_id"] + 1
             msg = update.get("message")
@@ -357,16 +363,23 @@ def main():
                 continue
             _rate_limit[chat_id].append(now)
 
-            # Start typing BEFORE injecting so stop_typing always has a PID to kill
+            # Queue for batched injection
+            if chat_id not in to_inject:
+                to_inject[chat_id] = {"sender": sender, "texts": []}
+            to_inject[chat_id]["texts"].append(text)
+
+        # Inject each chat's messages as a single combined injection.
+        # Parts of a long Telegram message are joined with a blank line so
+        # Claude sees one coherent message instead of two racing injections.
+        for chat_id, batch in to_inject.items():
+            combined = "\n\n".join(batch["texts"])
+            if len(batch["texts"]) > 1:
+                log.info(f"Combining {len(batch['texts'])} parts into one injection for chat {chat_id}")
             start_typing(chat_id)
-            success = inject_to_claude(text, sender)
+            success = inject_to_claude(combined, batch["sender"])
             if not success:
                 stop_typing()
                 send_message(token, chat_id, "⚠️ Failed to reach Clawdy session. Is it running?")
-            else:
-                # Brief pause between consecutive messages so Claude can process
-                # each injection before the next one arrives in the tmux session.
-                time.sleep(0.2)
 
 
 if __name__ == "__main__":
