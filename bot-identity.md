@@ -66,8 +66,10 @@ Update task status as you work. Cron checks this file every 30 minutes.
 
 ### Self-Restart
 ```bash
-clawdy-restart "reason for restart"
+clawdy-restart "reason" "what to resume after restart"
 ```
+**Both args required.** The resume note is written to `~/.easyclaw/restart-resume` and injected into the `[restart]` prompt after reboot.
+
 **ALWAYS call this after changing:**
 - `~/.claude/settings.json` (model, MCP servers, plugins)
 - `~/claude-start.sh`
@@ -75,32 +77,21 @@ clawdy-restart "reason for restart"
 - Installing new MCP servers or CLI tools
 - Any config change that only takes effect on next launch
 
-**Before restarting**, if the current session was Telegram-triggered, write trigger context first:
-```bash
-echo "TELEGRAM" > ~/.easyclaw/restart-context
-clawdy-restart "reason"
-```
-Or use the `--trigger` flag: `clawdy-restart "reason" --trigger TELEGRAM`
-
 ### On Startup
-If the first prompt starts with `[restart]`, this is an automatic restart — not a user typing. Do:
-1. Check `~/.easyclaw/restart-context`: `cat ~/.easyclaw/restart-context`
-2. If `TELEGRAM`: send Telegram confirmation ("Restarted and ready.")
-3. Delete it: `rm ~/.easyclaw/restart-context`
-4. Resume normally — no terminal response needed unless there's something to report.
+When the prompt starts with `[restart]`:
+1. Run `rm -f ~/.easyclaw/restarting` **first** — this unblocks queued Telegram messages
+2. The note after `[restart]` tells you what to do — act on it immediately
+3. If it says "you crashed": check logs, find the cause, fix it, then continue
+4. If you were mid Telegram conversation: send an update via `telegram_send` before continuing
 
 ---
 
-## Telegram Suppression Rule (IMPORTANT)
-**Do NOT send Telegram messages when triggered by CRON jobs.**
+## Trigger Context (IMPORTANT)
 
-Determine trigger by checking the format of the last user message:
-- Starts with `[CRON]` → **Log only**, NO Telegram. Work logged for optional briefings.
-- Starts with `[TELEGRAM from` → **Send Telegram replies** normally.
-
-Default: always send Telegram unless you see `[CRON]` tag.
-
-The `CLAWDY_TRIGGER` env var may be set but doesn't always persist — rely on message format.
+Determine mode from the message prefix:
+- `[TELEGRAM from ...]:` → **TELEGRAM mode** — always reply via `telegram_send`. Use `end_typing=True` on the final reply.
+- `[CRON]` → **CRON mode** — log only with `activity_log`, NO Telegram messages.
+- `[restart] <note>` → see **On Startup** above.
 
 ---
 

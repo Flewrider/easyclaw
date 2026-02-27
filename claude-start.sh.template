@@ -44,10 +44,10 @@ sleep 8
 tmux send-keys -t "$SESSION:claude" "[restart] $RESTART_MSG"
 sleep 2
 tmux send-keys -t "$SESSION:claude" "" C-m
-sleep 2
 
-# Clear restarting flag — bot can now inject queued messages
-rm -f "%%HOME%%/.easyclaw/restarting"
+# Claude clears ~/.easyclaw/restarting itself after handling [restart].
+# Safety fallback: force-clear after 5 minutes in case Claude fails.
+(sleep 300 && rm -f "%%HOME%%/.easyclaw/restarting") &
 
 # Block until tmux session ends so systemd can track and restart
 while tmux has-session -t "$SESSION" 2>/dev/null; do
