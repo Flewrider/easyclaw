@@ -229,12 +229,12 @@ def main():
 
             log.info(f"Message from {sender} ({chat_id}): {text[:80]}")
 
-            # Inject into Claude tmux session
+            # Start typing BEFORE injecting so stop_typing always has a PID to kill
+            start_typing(chat_id)
             success = inject_to_claude(text, sender)
             if not success:
+                stop_typing()
                 send_message(token, chat_id, "⚠️ Failed to reach Clawdy session. Is it running?")
-            else:
-                start_typing(chat_id)
 
 
 if __name__ == "__main__":
