@@ -153,6 +153,7 @@ def start_typing(chat_id, timeout=30):
     global _typing_thread
     stop_typing()  # stop any existing thread first
     _stop_typing_event.clear()
+    STOP_TYPING.unlink(missing_ok=True)  # clear any stale flag from prior session
 
     def _loop():
         deadline = time.time() + timeout
