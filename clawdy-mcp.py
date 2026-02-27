@@ -82,27 +82,6 @@ def db_connect() -> sqlite3.Connection:
     return conn
 
 
-def stop_typing() -> None:
-    if TYPING_PID.exists():
-        try:
-            pid = int(TYPING_PID.read_text().strip())
-            os.kill(pid, 9)
-        except (ProcessLookupError, ValueError, PermissionError):
-            pass
-        TYPING_PID.unlink(missing_ok=True)
-    # Belt-and-suspenders: kill any stale loop that lost its PID file
-    subprocess.run(["pkill", "-9", "-f", "clawdy-typing-loop.py"], capture_output=True)
-
-
-def start_typing(chat_id: int) -> None:
-    stop_typing()
-    proc = subprocess.Popen(
-        [sys.executable, str(TYPING_LOOP), str(chat_id)],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    )
-    TYPING_PID.write_text(str(proc.pid))
-
-
 # ── Tool implementations ──────────────────────────────────────────────────────
 
 def impl_memory_search(query: str) -> str:
@@ -203,9 +182,6 @@ def impl_telegram_send(message: str, end_typing: bool = False) -> str:
     chat_id = get_telegram_chat_id()
     if not chat_id:
         return "No Telegram chat ID configured. Send a message to the bot first."
-
-    if end_typing:
-        stop_typing()
 
     MAX_LEN = 4096
     chunks = [message[i:i+MAX_LEN] for i in range(0, len(message), MAX_LEN)]
