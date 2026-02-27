@@ -22,6 +22,7 @@ EASYCLAW = Path.home() / ".easyclaw"
 ENV_FILE = EASYCLAW / ".env"
 CONFIG_FILE = EASYCLAW / "telegram-config.json"
 LOG_FILE = EASYCLAW / "telegram-bot.log"
+STOP_TYPING = EASYCLAW / "stop-typing"
 FILES_DIR = Path.home() / "telegram-files"  # overridden in main() from env
 
 # Rate limiting: max 5 messages per 30 seconds per chat_id
@@ -154,6 +155,10 @@ def start_typing(chat_id):
 
     def _loop():
         while True:
+            # Check for stop signal written by clawdy-mcp's telegram_send
+            if STOP_TYPING.exists():
+                STOP_TYPING.unlink(missing_ok=True)
+                break
             tg_request(_bot_token, "sendChatAction", chat_id=chat_id, action="typing")
             if _stop_typing_event.wait(4):
                 break

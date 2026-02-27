@@ -49,6 +49,7 @@ ACTIVITY_LOG  = EASYCLAW / "activity-log.md"
 STATUS_FILE   = EASYCLAW / "status"
 TASKS_FILE    = EASYCLAW / "tasks.md"
 AGENT_LOG     = EASYCLAW / "agent-sessions.jsonl"
+STOP_TYPING   = EASYCLAW / "stop-typing"
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -175,13 +176,10 @@ def impl_memory_list(days: int = 7) -> str:
 
 def impl_telegram_send(message: str, end_typing: bool = False) -> str:
     import requests  # local import — only needed if telegram is used
-    import subprocess
 
-    # Kill any stale typing loop processes before sending message
-    try:
-        subprocess.run(["pkill", "-f", "clawdy-typing-loop"], timeout=2)
-    except Exception:
-        pass
+    # Signal telegram-bot.py to stop the typing thread before we send.
+    # The bot's typing loop checks this flag file on each iteration and stops.
+    STOP_TYPING.touch()
 
     env = load_env()
     token = env.get("TELEGRAM_BOT_TOKEN", "")
