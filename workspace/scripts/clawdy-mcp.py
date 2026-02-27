@@ -817,6 +817,7 @@ async def list_tools() -> list[types.Tool]:
                         "default": False,
                     },
                     "chat_id": {
+                        "type": "integer",
                         "description": "Optional chat ID to send to. Defaults to the configured owner chat. Use for group chats or other authorized chats.",
                     },
                 },
