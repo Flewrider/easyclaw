@@ -233,7 +233,7 @@ def impl_memory_list(days: int = 7) -> str:
     return "\n".join(lines)
 
 
-def impl_telegram_send(message: str, end_typing: bool = False) -> str:
+def impl_telegram_send(message: str, end_typing: bool = False, chat_id: int | str | None = None) -> str:
     import requests  # local import — only needed if telegram is used
 
     # Signal telegram-bot.py to stop the typing thread ONLY when caller
@@ -246,7 +246,8 @@ def impl_telegram_send(message: str, end_typing: bool = False) -> str:
     token = env.get("TELEGRAM_BOT_TOKEN", "")
     if not token or token == "your_bot_token_here":
         return "TELEGRAM_BOT_TOKEN not configured."
-    chat_id = get_telegram_chat_id()
+    if chat_id is None:
+        chat_id = get_telegram_chat_id()
     if not chat_id:
         return "No Telegram chat ID configured. Send a message to the bot first."
 
@@ -815,6 +816,9 @@ async def list_tools() -> list[types.Tool]:
                         "description": "Stop the typing indicator after sending (use on final message)",
                         "default": False,
                     },
+                    "chat_id": {
+                        "description": "Optional chat ID to send to. Defaults to the configured owner chat. Use for group chats or other authorized chats.",
+                    },
                 },
                 "required": ["message"],
             },
@@ -1052,7 +1056,9 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextCont
             result = impl_memory_list(int(arguments.get("days", 7)))
         elif name == "telegram_send":
             result = impl_telegram_send(
-                arguments["message"], bool(arguments.get("end_typing", False))
+                arguments["message"],
+                bool(arguments.get("end_typing", False)),
+                arguments.get("chat_id"),
             )
         elif name == "telegram_send_file":
             result = impl_telegram_send_file(
