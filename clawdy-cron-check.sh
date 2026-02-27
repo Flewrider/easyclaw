@@ -22,11 +22,6 @@ if [ "$status" = "busy" ]; then
   echo "idle" > "$STATUS_FILE"
 fi
 
-CONTEXT_FILE="$HOME/.easyclaw/restart-context"
-
-# Write trigger context BEFORE injecting — survives any restart mid-work
-echo "CRON" > "$CONTEXT_FILE"
-
 # Inject task check with [CRON] tag — no Telegram messages, log to activity log only
 tmux send-keys -t "$SESSION:$WINDOW" "[CRON] Check ~/.easyclaw/tasks.md — if there are pending or in-progress tasks, continue working on them and update their status."
 sleep 1

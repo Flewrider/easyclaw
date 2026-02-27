@@ -43,7 +43,6 @@ TYPING_LOOP = EASYCLAW / "scripts" / "clawdy-typing-loop.py"
 ACTIVITY_LOG = EASYCLAW / "activity-log.md"
 STATUS_FILE = EASYCLAW / "status"
 TASKS_FILE  = EASYCLAW / "tasks.md"
-RESTART_CONTEXT = EASYCLAW / "restart-context"
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -221,13 +220,6 @@ def impl_telegram_send(message: str, end_typing: bool = False) -> str:
                 return f"Request failed: {e}"
         else:
             return f"Failed to send chunk: {result}"
-
-    # Clear trigger context after final message — signals end of this Telegram session
-    if end_typing:
-        try:
-            RESTART_CONTEXT.unlink(missing_ok=True)
-        except Exception:
-            pass
 
     sent_info = f"{len(message)} chars" if len(chunks) == 1 else f"{len(message)} chars in {len(chunks)} parts"
     return f"Sent ({sent_info}). Typing indicator: {'stopped' if end_typing else 'still running'}."

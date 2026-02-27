@@ -26,6 +26,15 @@ tmux new-session -d -s "$SESSION" -c "$WORKDIR" -n "claude" \
 # Wait for Claude to finish loading (MCP servers take time to init)
 sleep 15
 
+# Determine restart message — use agent-written resume note if present, else crash message
+RESUME_FILE="%%HOME%%/.easyclaw/restart-resume"
+if [ -f "$RESUME_FILE" ]; then
+  RESTART_MSG=$(cat "$RESUME_FILE")
+  rm -f "$RESUME_FILE"
+else
+  RESTART_MSG="you crashed. find out why and fix the issue then continue where you left off"
+fi
+
 # Inject startup commands — send text and Enter separately to avoid multiline paste mode
 tmux send-keys -t "$SESSION:claude" "/rename %%BOT_NAME%%"
 sleep 2
@@ -35,7 +44,7 @@ tmux send-keys -t "$SESSION:claude" "/remote-control"
 sleep 2
 tmux send-keys -t "$SESSION:claude" "" C-m
 sleep 8
-tmux send-keys -t "$SESSION:claude" "[restart] Continue from where you left off."
+tmux send-keys -t "$SESSION:claude" "[restart] $RESTART_MSG"
 sleep 1
 tmux send-keys -t "$SESSION:claude" "" C-m
 

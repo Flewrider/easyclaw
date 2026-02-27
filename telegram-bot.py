@@ -25,7 +25,6 @@ TYPING_PID_FILE = EASYCLAW / "telegram-typing.pid"
 TYPING_LOOP = EASYCLAW / "scripts" / "clawdy-typing-loop.py"
 TMUX_SESSION = "claude"
 TMUX_WINDOW = "claude"
-RESTART_CONTEXT = EASYCLAW / "restart-context"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -102,12 +101,6 @@ def inject_to_claude(message_text, sender_name, chat_id):
     """Inject a message into the tmux Claude session."""
     display = f"[TELEGRAM from {sender_name}]: {message_text}"
     log.info(f"Injecting to Claude: {display[:80]}")
-
-    # Write trigger context BEFORE injecting — survives any restart mid-work
-    try:
-        RESTART_CONTEXT.write_text("TELEGRAM")
-    except Exception as e:
-        log.warning(f"Could not write restart context: {e}")
 
     try:
         subprocess.run([
