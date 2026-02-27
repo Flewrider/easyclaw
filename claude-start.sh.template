@@ -37,17 +37,14 @@ else
 fi
 
 # Inject startup commands — send text and Enter separately to avoid multiline paste mode
-tmux send-keys -t "$SESSION:claude" "/rename %%BOT_NAME%%"
-sleep 2
-tmux send-keys -t "$SESSION:claude" "" C-m
-sleep 5
 tmux send-keys -t "$SESSION:claude" "/remote-control"
 sleep 2
 tmux send-keys -t "$SESSION:claude" "" C-m
 sleep 8
 tmux send-keys -t "$SESSION:claude" "[restart] $RESTART_MSG"
-sleep 1
+sleep 2
 tmux send-keys -t "$SESSION:claude" "" C-m
+sleep 2
 
 # Clear restarting flag — bot can now inject queued messages
 rm -f "%%HOME%%/.easyclaw/restarting"
