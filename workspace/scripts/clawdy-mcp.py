@@ -15,6 +15,8 @@ Tools exposed:
   - task_list()
   - task_done(pattern)
   - task_remove(pattern)
+  - task_edit(pattern, new_description)
+  - memory_update(id, content, title?, category?)
   - spawn_agent(prompt, model?, allowed_tools?)
   - converse_with_agent(session_id, prompt, model?, allowed_tools?)
 
@@ -362,6 +364,24 @@ def impl_task_done(pattern: str) -> str:
     return f"Task marked done: {desc}"
 
 
+def impl_task_edit(pattern: str, new_description: str) -> str:
+    """Replace the description of the first task matching `pattern` in-place."""
+    _init_tasks_file()
+    lines = TASKS_FILE.read_text().splitlines(keepends=True)
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith("- [") and pattern.lower() in stripped.lower():
+            # Determine checkbox state
+            checkbox = stripped[:5]  # e.g. "- [ ]" or "- [x]" or "- [~]"
+            lines[i] = f"{checkbox} [{today}] {new_description}\n"
+            TASKS_FILE.write_text("".join(lines))
+            return f"Task updated: {new_description}"
+
+    return f"No task found matching: '{pattern}'"
+
+
 def impl_task_remove(pattern: str) -> str:
     """Remove a task entirely (any status) matching `pattern`."""
     _init_tasks_file()
@@ -378,6 +398,36 @@ def impl_task_remove(pattern: str) -> str:
         return f"No task found matching: '{pattern}'"
     TASKS_FILE.write_text("".join(new_lines))
     return f"Removed {len(removed)} task(s):\n" + "\n".join(removed)
+
+
+def impl_memory_update(
+    memory_id: int,
+    content: str,
+    title: str | None = None,
+    category: str | None = None,
+) -> str:
+    """Update an existing memory's content (and optionally title/category) by ID."""
+    if not MEMORY_DB.exists():
+        return "Memory database not found."
+    with db_connect() as conn:
+        row = conn.execute("SELECT id FROM memories WHERE id = ?", (memory_id,)).fetchone()
+        if not row:
+            return f"No memory found with id {memory_id}."
+        fields = ["content = ?", "updated_at = datetime('now')"]
+        values: list[Any] = [content]
+        if title is not None:
+            fields.append("title = ?")
+            values.append(title)
+        if category is not None:
+            fields.append("category = ?")
+            values.append(category)
+        values.append(memory_id)
+        conn.execute(f"UPDATE memories SET {', '.join(fields)} WHERE id = ?", values)
+        conn.commit()
+    rebuild_script = HOME / ".claude" / "memory" / "clawdy-memory.py"
+    if rebuild_script.exists():
+        subprocess.run([sys.executable, str(rebuild_script), "rebuild-md"], capture_output=True)
+    return f"Memory {memory_id} updated."
 
 
 def _log_agent_session(
@@ -696,6 +746,32 @@ async def list_tools() -> list[types.Tool]:
             },
         ),
         types.Tool(
+            name="task_edit",
+            description="Edit a task's description in-place. Matches by partial text, preserves status (pending/in-progress/done).",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "pattern": {"type": "string", "description": "Partial text to match the task"},
+                    "new_description": {"type": "string", "description": "Replacement description"},
+                },
+                "required": ["pattern", "new_description"],
+            },
+        ),
+        types.Tool(
+            name="memory_update",
+            description="Update an existing memory's content (and optionally title or category) by ID. Use memory_search or memory_list to find the ID first.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "id": {"type": "integer", "description": "Memory ID to update"},
+                    "content": {"type": "string", "description": "New full content"},
+                    "title": {"type": "string", "description": "New title (optional, keeps existing if omitted)"},
+                    "category": {"type": "string", "description": "New category (optional, keeps existing if omitted)"},
+                },
+                "required": ["id", "content"],
+            },
+        ),
+        types.Tool(
             name="spawn_agent",
             description=(
                 "Launch a headless Claude Code subagent with a prompt. Returns the agent's response, "
@@ -789,6 +865,15 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextCont
             result = impl_task_done(arguments["pattern"])
         elif name == "task_remove":
             result = impl_task_remove(arguments["pattern"])
+        elif name == "task_edit":
+            result = impl_task_edit(arguments["pattern"], arguments["new_description"])
+        elif name == "memory_update":
+            result = impl_memory_update(
+                int(arguments["id"]),
+                arguments["content"],
+                arguments.get("title"),
+                arguments.get("category"),
+            )
         elif name == "spawn_agent":
             result = await impl_spawn_agent(
                 arguments["prompt"],
