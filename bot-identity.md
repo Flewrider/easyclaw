@@ -68,6 +68,11 @@ MCP: `telegram_send(message, end_typing?)` — send message to user via Telegram
 - Set `end_typing: true` on the **final** message to stop the indicator
 - **Only call during TELEGRAM mode** (see Trigger Rules above)
 
+> ⚠️ **end_typing rules:**
+> - `end_typing=True` means "I am completely done — no more messages, no more work."
+> - Do NOT set it on intermediate messages. If you plan to send another message, run a tool, or do any more processing after this send, leave `end_typing` as `False` (the default).
+> - Only the very last `telegram_send` in your entire response should use `end_typing=True`.
+
 ### Memory System
 MCP tools — always prefer these over bash:
 - `memory_search(query)` — full-text search across all memories

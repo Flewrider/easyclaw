@@ -179,9 +179,11 @@ def impl_memory_list(days: int = 7) -> str:
 def impl_telegram_send(message: str, end_typing: bool = False) -> str:
     import requests  # local import — only needed if telegram is used
 
-    # Signal telegram-bot.py to stop the typing thread before we send.
-    # The bot's typing loop checks this flag file on each iteration and stops.
-    STOP_TYPING.touch()
+    # Signal telegram-bot.py to stop the typing thread ONLY when caller
+    # explicitly says this is the final message.  Touching the flag on every
+    # send killed the indicator during multi-part replies.
+    if end_typing:
+        STOP_TYPING.touch()
 
     env = load_env()
     token = env.get("TELEGRAM_BOT_TOKEN", "")
@@ -639,7 +641,14 @@ async def list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="telegram_send",
-            description="Send a message to the user via Telegram. By default the typing indicator keeps running; set end_typing=true on the final message to stop it.",
+            description=(
+                "Send a message to the user via Telegram. The typing indicator keeps "
+                "running by default so the user knows you're still working. "
+                "IMPORTANT: Only set end_typing=true on the absolute LAST telegram_send "
+                "call when ALL work is completely finished — no more messages to send, "
+                "no more processing to do. If you still have follow-up messages, tool "
+                "calls, or any remaining work, do NOT set end_typing=true yet."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
