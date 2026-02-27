@@ -626,6 +626,15 @@ install_scripts() {
         print_success "Installed clawdy-daily-briefing.sh"
     fi
 
+    # Install clawdy-restart to /usr/local/bin so it's on PATH
+    if [ -f "$SCRIPT_DIR/clawdy-restart" ]; then
+        cp "$SCRIPT_DIR/clawdy-restart" /usr/local/bin/clawdy-restart
+        chmod +x /usr/local/bin/clawdy-restart
+        print_success "Installed clawdy-restart -> /usr/local/bin/"
+    else
+        print_warn "clawdy-restart not found in $SCRIPT_DIR — skipping"
+    fi
+
     # Make all scripts executable
     chmod +x "${USER_HOME}/.easyclaw/scripts/"*.sh 2>/dev/null || true
     chmod +x "${USER_HOME}/.easyclaw/scripts/"*.py 2>/dev/null || true

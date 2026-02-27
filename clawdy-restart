@@ -1,0 +1,29 @@
+#!/bin/bash
+# clawdy-restart — gracefully restart the Claude Code session via systemd
+#
+# Usage: clawdy-restart "reason" "what to resume after restart"
+# Both args required — the resume note is written to ~/.easyclaw/restart-resume
+# and injected into the [restart] prompt so the new session knows what to do.
+
+if [ -z "${1:-}" ] || [ -z "${2:-}" ]; then
+  echo "Usage: clawdy-restart \"reason\" \"what to resume after restart\""
+  exit 1
+fi
+
+REASON="$1"
+RESUME="$2"
+LOG_FILE="$HOME/.easyclaw/activity-log.md"
+RESUME_FILE="$HOME/.easyclaw/restart-resume"
+TIMESTAMP=$(date '+%Y-%m-%d %H:%M')
+
+mkdir -p "$HOME/.easyclaw"
+echo "$RESUME" > "$RESUME_FILE"
+
+# Set restarting flag BEFORE the service restarts — prevents the bot from
+# injecting queued messages during the gap between old service stopping and
+# claude-start.sh running (which is where the flag was previously set too late).
+touch "$HOME/.easyclaw/restarting"
+
+echo "[$TIMESTAMP] system: Restarting — $REASON" >> "$LOG_FILE"
+echo "Restarting claude-code service (reason: $REASON)..."
+sudo systemctl restart claude-code.service
