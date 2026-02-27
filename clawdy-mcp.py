@@ -41,15 +41,14 @@ from mcp.server.lowlevel import NotificationOptions
 # ── Paths ────────────────────────────────────────────────────────────────────
 
 HOME = Path.home()
-EASYCLAW    = HOME / ".easyclaw"
-MEMORY_DB   = EASYCLAW / "memories.db"
-ENV_FILE    = EASYCLAW / ".env"
-CONFIG_FILE = EASYCLAW / "telegram-config.json"
-TYPING_PID  = EASYCLAW / "telegram-typing.pid"
-TYPING_LOOP = EASYCLAW / "scripts" / "clawdy-typing-loop.py"
-ACTIVITY_LOG = EASYCLAW / "activity-log.md"
-STATUS_FILE = EASYCLAW / "status"
-TASKS_FILE  = EASYCLAW / "tasks.md"
+EASYCLAW      = HOME / ".easyclaw"
+MEMORY_DB     = EASYCLAW / "memories.db"
+ENV_FILE      = EASYCLAW / ".env"
+CONFIG_FILE   = EASYCLAW / "telegram-config.json"
+ACTIVITY_LOG  = EASYCLAW / "activity-log.md"
+STATUS_FILE   = EASYCLAW / "status"
+TASKS_FILE    = EASYCLAW / "tasks.md"
+AGENT_LOG     = EASYCLAW / "agent-sessions.jsonl"
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -399,6 +398,35 @@ def impl_task_remove(pattern: str) -> str:
     return f"Removed {len(removed)} task(s):\n" + "\n".join(removed)
 
 
+def _log_agent_session(
+    entry_type: str,  # "spawn" | "converse"
+    prompt: str,
+    result_json: str,
+    model: str,
+    session_id: str | None = None,
+) -> None:
+    """Append a JSONL entry to agent-sessions.jsonl for long-term lookup."""
+    try:
+        data = json.loads(result_json)
+    except (json.JSONDecodeError, TypeError):
+        data = {"result": result_json}
+    entry = {
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "type": entry_type,
+        "session_id": data.get("session_id") or session_id or "",
+        "model": model,
+        "prompt": prompt,
+        "result": data.get("result", ""),
+        "is_error": data.get("is_error", False),
+        "cost_usd": data.get("cost_usd", 0),
+        "duration_ms": data.get("duration_ms", 0),
+        "num_turns": data.get("num_turns", 0),
+    }
+    AGENT_LOG.parent.mkdir(parents=True, exist_ok=True)
+    with open(AGENT_LOG, "a") as f:
+        f.write(json.dumps(entry) + "\n")
+
+
 # Tools that subagents are never allowed to use regardless of caller's allowed_tools
 _AGENT_BLOCKED_TOOLS = ["mcp__clawdy-mcp__telegram_send"]
 
@@ -471,7 +499,9 @@ async def impl_spawn_agent(
         return f"Agent failed (exit {proc.returncode}): {stderr.decode()[:500]}"
 
     try:
-        return _parse_agent_output(stdout.decode())
+        parsed = _parse_agent_output(stdout.decode())
+        _log_agent_session("spawn", prompt, parsed, model)
+        return parsed
     except (json.JSONDecodeError, KeyError) as e:
         return f"Failed to parse agent output: {e}\nRaw: {stdout.decode()[:500]}"
 
@@ -508,7 +538,9 @@ async def impl_converse_with_agent(
         return f"Agent failed (exit {proc.returncode}): {stderr.decode()[:500]}"
 
     try:
-        return _parse_agent_output(stdout.decode())
+        parsed = _parse_agent_output(stdout.decode())
+        _log_agent_session("converse", prompt, parsed, model, session_id=session_id)
+        return parsed
     except (json.JSONDecodeError, KeyError) as e:
         return f"Failed to parse agent output: {e}\nRaw: {stdout.decode()[:500]}"
 
