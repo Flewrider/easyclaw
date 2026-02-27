@@ -175,6 +175,14 @@ def impl_memory_list(days: int = 7) -> str:
 
 def impl_telegram_send(message: str, end_typing: bool = False) -> str:
     import requests  # local import — only needed if telegram is used
+    import subprocess
+
+    # Kill any stale typing loop processes before sending message
+    try:
+        subprocess.run(["pkill", "-f", "clawdy-typing-loop"], timeout=2)
+    except Exception:
+        pass
+
     env = load_env()
     token = env.get("TELEGRAM_BOT_TOKEN", "")
     if not token or token == "your_bot_token_here":
