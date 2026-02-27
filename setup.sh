@@ -639,18 +639,24 @@ install_scripts() {
     chmod +x "${USER_HOME}/.easyclaw/scripts/"*.sh 2>/dev/null || true
     chmod +x "${USER_HOME}/.easyclaw/scripts/"*.py 2>/dev/null || true
 
-    # Set up crontab for cron check (idempotent — removes old entry first)
-    local cron_line="*/30 * * * * ${USER_HOME}/.easyclaw/scripts/clawdy-cron-check.sh"
-    ( crontab -l 2>/dev/null | grep -v "clawdy-cron-check" ; echo "$cron_line" ) | crontab -
+    # Set up crontab — use temp file to avoid pipefail killing us when no crontab exists
+    local tmp_cron; tmp_cron=$(mktemp)
+    crontab -l 2>/dev/null | grep -v "clawdy-cron-check" > "$tmp_cron" || true
+    echo "*/30 * * * * ${USER_HOME}/.easyclaw/scripts/clawdy-cron-check.sh" >> "$tmp_cron"
+    crontab "$tmp_cron"
+    rm -f "$tmp_cron"
     print_success "Crontab updated: cron check every 30 min"
-    log "INFO" "Crontab entry: $cron_line"
+    log "INFO" "Crontab: cron check every 30 min"
 
     # Set up daily briefing cron if the script was installed
     if [ -f "${USER_HOME}/.easyclaw/scripts/clawdy-daily-briefing.sh" ]; then
-        local briefing_line="0 8 * * * ${USER_HOME}/.easyclaw/scripts/clawdy-daily-briefing.sh"
-        ( crontab -l 2>/dev/null | grep -v "clawdy-daily-briefing" ; echo "$briefing_line" ) | crontab -
+        local tmp_briefing; tmp_briefing=$(mktemp)
+        crontab -l 2>/dev/null | grep -v "clawdy-daily-briefing" > "$tmp_briefing" || true
+        echo "0 8 * * * ${USER_HOME}/.easyclaw/scripts/clawdy-daily-briefing.sh" >> "$tmp_briefing"
+        crontab "$tmp_briefing"
+        rm -f "$tmp_briefing"
         print_success "Crontab updated: daily briefing at 8am"
-        log "INFO" "Crontab entry: $briefing_line"
+        log "INFO" "Crontab: daily briefing at 8am"
     fi
 
     print_success "Scripts installed"
