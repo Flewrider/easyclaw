@@ -206,6 +206,18 @@ def impl_telegram_send(message: str, end_typing: bool = False) -> str:
             return f"Failed to send chunk: {result}"
 
     sent_info = f"{len(message)} chars" if len(chunks) == 1 else f"{len(message)} chars in {len(chunks)} parts"
+
+    # If end_typing=True, explicitly clear the typing indicator by sending a different action
+    if end_typing:
+        try:
+            requests.post(
+                f"https://api.telegram.org/bot{token}/sendChatAction",
+                json={"chat_id": chat_id, "action": "upload_document"},
+                timeout=5,
+            )
+        except Exception:
+            pass  # Silent fail on clearing — message was already sent
+
     return f"Sent ({sent_info}). Typing indicator: {'stopped' if end_typing else 'still running'}."
 
 
