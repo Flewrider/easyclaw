@@ -536,7 +536,7 @@ write_env_file() {
 # Step 6b: Install clawdy-mcp Python server and register in Claude settings
 install_mcp_server() {
     print_info "Installing clawdy-mcp server..."
-    log "DEBUG" "MCP server: $SCRIPT_DIR/clawdy-mcp.py"
+    log "DEBUG" "MCP server: $SCRIPT_DIR/workspace/scripts/clawdy-mcp.py"
 
     if [ ! -f "$SCRIPT_DIR/workspace/scripts/clawdy-mcp.py" ]; then
         print_warn "workspace/scripts/clawdy-mcp.py not found — skipping MCP setup"
