@@ -11,7 +11,8 @@ WORKDIR="%%HOME%%"
 CLAUDE="%%HOME%%/.local/bin/claude"
 export IS_SANDBOX=1
 
-# Reset status to idle on every restart; set restarting flag so bot queues messages
+# Reset status; ensure restarting flag is set (clawdy-restart sets it before service
+# restart, but this covers first boot and edge cases)
 mkdir -p "%%HOME%%/.easyclaw"
 echo "idle" > "%%HOME%%/.easyclaw/status"
 touch "%%HOME%%/.easyclaw/restarting"
@@ -19,35 +20,37 @@ touch "%%HOME%%/.easyclaw/restarting"
 # Kill any stale tmux session
 tmux kill-session -t "$SESSION" 2>/dev/null
 
-# Start Claude Code inside tmux (restarts automatically if it crashes)
-# --continue resumes the latest session; falls back to fresh start if none exists
+# Start Claude Code inside tmux.
+# Each restart reads the restart-resume file (if present), deletes it, then launches
+# claude with /remote-control as the initial prompt and the restart context baked into
+# --append-system-prompt. Falls back to crash message if no resume file exists.
 tmux new-session -d -s "$SESSION" -c "$WORKDIR" -n "claude" \
-  "while true; do $CLAUDE --dangerously-skip-permissions --continue || $CLAUDE --dangerously-skip-permissions; echo '[claude exited — restarting in 3s...]'; sleep 3; done"
+  "while true; do \
+    RESUME=\"%%HOME%%/.easyclaw/restart-resume\"; \
+    if [ -f \"\$RESUME\" ]; then \
+      MSG=\$(cat \"\$RESUME\"); rm -f \"\$RESUME\"; \
+    else \
+      MSG=\"you crashed. find out why and fix the issue then continue where you left off\"; \
+    fi; \
+    $CLAUDE \"/remote-control\" --continue --dangerously-skip-permissions --chrome \
+      --append-system-prompt \"RESTART CONTEXT: \$MSG\" \
+    || $CLAUDE \"/remote-control\" --dangerously-skip-permissions --chrome \
+      --append-system-prompt \"RESTART CONTEXT: \$MSG\"; \
+    echo '[claude exited — restarting in 3s...]'; sleep 3; \
+  done"
 
 # Wait for Claude to finish loading (MCP servers take time to init)
 sleep 15
 
-# Determine restart message — use agent-written resume note if present, else crash message
-RESUME_FILE="%%HOME%%/.easyclaw/restart-resume"
-if [ -f "$RESUME_FILE" ]; then
-  RESTART_MSG=$(cat "$RESUME_FILE")
-  rm -f "$RESUME_FILE"
-else
-  RESTART_MSG="you crashed. find out why and fix the issue then continue where you left off"
-fi
-
-# Inject startup commands — send text and Enter separately to avoid multiline paste mode
-tmux send-keys -t "$SESSION:claude" "/remote-control"
-sleep 2
+# Inject "continue" — nudges Claude to read the RESTART CONTEXT from the system prompt
+# and act on it (send Telegram update, resume task, etc.)
+tmux send-keys -t "$SESSION:claude" "continue"
+sleep 1
 tmux send-keys -t "$SESSION:claude" "" C-m
-sleep 8
-tmux send-keys -t "$SESSION:claude" "[restart] $RESTART_MSG"
 sleep 2
-tmux send-keys -t "$SESSION:claude" "" C-m
 
-# Claude clears ~/.easyclaw/restarting itself after handling [restart].
-# Safety fallback: force-clear after 5 minutes in case Claude fails.
-(sleep 300 && rm -f "%%HOME%%/.easyclaw/restarting") &
+# Clear restarting flag — bot can now inject queued Telegram messages
+rm -f "%%HOME%%/.easyclaw/restarting"
 
 # Block until tmux session ends so systemd can track and restart
 while tmux has-session -t "$SESSION" 2>/dev/null; do

@@ -78,11 +78,10 @@ clawdy-restart "reason" "what to resume after restart"
 - Any config change that only takes effect on next launch
 
 ### On Startup
-When the prompt starts with `[restart]`:
-1. Run `rm -f ~/.easyclaw/restarting` **first** — this unblocks queued Telegram messages
-2. The note after `[restart]` tells you what to do — act on it immediately
-3. If it says "you crashed": check logs, find the cause, fix it, then continue
-4. If you were mid Telegram conversation: send an update via `telegram_send` before continuing
+When the first message is `continue`, your system prompt contains a `RESTART CONTEXT:` line — read it and act on it:
+1. If it says "you crashed": check logs at `~/.easyclaw/activity-log.md`, find the cause, fix it, then continue
+2. If you were mid Telegram conversation: send an update via `telegram_send` before continuing
+3. Otherwise: act on the specific instructions in the restart context
 
 ---
 
@@ -91,7 +90,7 @@ When the prompt starts with `[restart]`:
 Determine mode from the message prefix:
 - `[TELEGRAM from ...]:` → **TELEGRAM mode** — always reply via `telegram_send`. Use `end_typing=True` on the final reply.
 - `[CRON]` → **CRON mode** — log only with `activity_log`, NO Telegram messages.
-- `[restart] <note>` → see **On Startup** above.
+- `continue` (first message after startup) → see **On Startup** above.
 
 ---
 
