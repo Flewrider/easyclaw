@@ -23,8 +23,12 @@ tmux kill-session -t "$SESSION" 2>/dev/null
 # --append-system-prompt. Falls back to crash message if no resume file exists.
 tmux new-session -d -s "$SESSION" -c "$WORKDIR" -n "claude" \
   "while true; do \
+    LAUNCHED=\"%%HOME%%/.easyclaw/has-launched\"; \
     RESUME=\"%%HOME%%/.easyclaw/restart-resume\"; \
-    if [ -f \"\$RESUME\" ]; then \
+    if [ ! -f \"\$LAUNCHED\" ]; then \
+      touch \"\$LAUNCHED\"; \
+      MSG=\"FIRST LAUNCH: This is the very first startup after installation. Send a Telegram greeting to let the user know you are online, then ask if they would like to run onboarding (name, timezone, primary use cases, daily briefing preference). Save responses to memory.\"; \
+    elif [ -f \"\$RESUME\" ]; then \
       MSG=\$(cat \"\$RESUME\"); rm -f \"\$RESUME\"; \
     else \
       MSG=\"you crashed. find out why and fix the issue then continue where you left off\"; \
