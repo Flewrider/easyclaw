@@ -513,6 +513,13 @@ write_env_file() {
 
     chmod 600 "$env_file"
     print_success "Configuration saved to $env_file"
+
+    # Symlink ~/.claude/memory/.env -> easyclaw/.env
+    # The telegram bot and MCP server look for .env there
+    local memory_dir="${USER_HOME}/.claude/memory"
+    mkdir -p "$memory_dir"
+    ln -sf "$env_file" "$memory_dir/.env"
+    log "INFO" "Symlinked $memory_dir/.env -> $env_file"
 }
 
 # Step 6b: Install clawdy-mcp Python server and register in Claude settings
