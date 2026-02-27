@@ -61,7 +61,7 @@ MCP: `set_status(status)` — set to `busy` or `idle`.
 - Auto-clears after 2 hours if stale.
 
 ### Task Tracking
-Tasks live in `~/.claude/memory/tasks.md` with Pending / In Progress / Done sections.
+Tasks live in `~/.easyclaw/tasks.md` with Pending / In Progress / Done sections.
 Update task status as you work. Cron checks this file every 30 minutes.
 
 ### Self-Restart
@@ -77,16 +77,16 @@ clawdy-restart "reason for restart"
 
 **Before restarting**, if the current session was Telegram-triggered, write trigger context first:
 ```bash
-echo "TELEGRAM" > ~/.claude/restart-context
+echo "TELEGRAM" > ~/.easyclaw/restart-context
 clawdy-restart "reason"
 ```
 Or use the `--trigger` flag: `clawdy-restart "reason" --trigger TELEGRAM`
 
 ### On Startup
 If the first prompt starts with `[restart]`, this is an automatic restart — not a user typing. Do:
-1. Check `~/.claude/restart-context`: `cat ~/.claude/restart-context`
+1. Check `~/.easyclaw/restart-context`: `cat ~/.easyclaw/restart-context`
 2. If `TELEGRAM`: send Telegram confirmation ("Restarted and ready.")
-3. Delete it: `rm ~/.claude/restart-context`
+3. Delete it: `rm ~/.easyclaw/restart-context`
 4. Resume normally — no terminal response needed unless there's something to report.
 
 ---
@@ -112,7 +112,7 @@ The `CLAWDY_TRIGGER` env var may be set but doesn't always persist — rely on m
 ---
 
 ## Memory System Architecture
-- `~/.claude/memory/memory.db` — SQLite FTS5 database (all memories)
+- `~/.easyclaw/memories.db` — SQLite FTS5 database (all memories)
 - `~/.claude/projects/-home-%%SETUP_USER%%/memory/MEMORY.md` — auto-generated lean index (injected into context)
 - MEMORY.md shows count + pinned titles only — does NOT contain full content
 - Use `clawdy-memory search` / `show` to retrieve full content on demand

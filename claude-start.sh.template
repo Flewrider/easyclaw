@@ -12,8 +12,8 @@ CLAUDE="%%HOME%%/.local/bin/claude"
 export IS_SANDBOX=1
 
 # Reset status to idle on every restart
-mkdir -p "%%HOME%%/.claude/memory"
-echo "idle" > "%%HOME%%/.claude/memory/status"
+mkdir -p "%%HOME%%/.easyclaw"
+echo "idle" > "%%HOME%%/.easyclaw/status"
 
 # Kill any stale tmux session
 tmux kill-session -t "$SESSION" 2>/dev/null

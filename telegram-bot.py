@@ -17,14 +17,15 @@ import logging
 from pathlib import Path
 from datetime import datetime
 
-ENV_FILE = Path.home() / ".claude" / "memory" / ".env"
-CONFIG_FILE = Path.home() / ".claude" / "memory" / "telegram-config.json"
-LOG_FILE = Path.home() / ".claude" / "memory" / "telegram-bot.log"
-TYPING_PID_FILE = Path.home() / ".claude" / "memory" / "telegram-typing.pid"
-TYPING_LOOP = Path.home() / ".claude" / "memory" / "clawdy-typing-loop.py"
+EASYCLAW = Path.home() / ".easyclaw"
+ENV_FILE = EASYCLAW / ".env"
+CONFIG_FILE = EASYCLAW / "telegram-config.json"
+LOG_FILE = EASYCLAW / "telegram-bot.log"
+TYPING_PID_FILE = EASYCLAW / "telegram-typing.pid"
+TYPING_LOOP = EASYCLAW / "scripts" / "clawdy-typing-loop.py"
 TMUX_SESSION = "claude"
 TMUX_WINDOW = "claude"
-RESTART_CONTEXT = Path.home() / ".claude" / "restart-context"
+RESTART_CONTEXT = EASYCLAW / "restart-context"
 
 logging.basicConfig(
     level=logging.INFO,

@@ -34,14 +34,16 @@ from mcp.server.lowlevel import NotificationOptions
 # ── Paths ────────────────────────────────────────────────────────────────────
 
 HOME = Path.home()
-MEMORY_DB   = HOME / ".claude" / "memory" / "memories.db"
-ENV_FILE    = HOME / ".claude" / "memory" / ".env"
-CONFIG_FILE = HOME / ".claude" / "memory" / "telegram-config.json"
-TYPING_PID  = HOME / ".claude" / "memory" / "telegram-typing.pid"
-TYPING_LOOP = HOME / ".claude" / "memory" / "clawdy-typing-loop.py"
-ACTIVITY_LOG = HOME / ".claude" / "memory" / "activity-log.md"
-STATUS_FILE = HOME / ".claude" / "memory" / "status"
-TASKS_FILE  = HOME / ".claude" / "memory" / "tasks.md"
+EASYCLAW    = HOME / ".easyclaw"
+MEMORY_DB   = EASYCLAW / "memories.db"
+ENV_FILE    = EASYCLAW / ".env"
+CONFIG_FILE = EASYCLAW / "telegram-config.json"
+TYPING_PID  = EASYCLAW / "telegram-typing.pid"
+TYPING_LOOP = EASYCLAW / "scripts" / "clawdy-typing-loop.py"
+ACTIVITY_LOG = EASYCLAW / "activity-log.md"
+STATUS_FILE = EASYCLAW / "status"
+TASKS_FILE  = EASYCLAW / "tasks.md"
+RESTART_CONTEXT = EASYCLAW / "restart-context"
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -223,7 +225,6 @@ def impl_telegram_send(message: str, end_typing: bool = False) -> str:
     # Clear trigger context after final message — signals end of this Telegram session
     if end_typing:
         try:
-            RESTART_CONTEXT = HOME / ".claude" / "restart-context"
             RESTART_CONTEXT.unlink(missing_ok=True)
         except Exception:
             pass

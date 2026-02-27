@@ -17,7 +17,7 @@ StartLimitIntervalSec=60
 # Hardening
 NoNewPrivileges=true
 ProtectSystem=strict
-ReadWritePaths=%%HOME%%/.claude/memory
+ReadWritePaths=%%HOME%%/.easyclaw
 
 [Install]
 WantedBy=multi-user.target

@@ -476,10 +476,13 @@ collect_config() {
 
 # Step 6: Write .env file (merge defaults from default.env, then apply real values)
 write_env_file() {
-    local env_file="$SCRIPT_DIR/.env"
+    local env_file="${USER_HOME}/.easyclaw/.env"
     local default_env="$SCRIPT_DIR/default.env"
 
     print_info "Writing configuration..."
+
+    # Ensure workspace dir exists
+    mkdir -p "${USER_HOME}/.easyclaw"
 
     # Start from default.env template if .env doesn't exist yet
     if [ ! -f "$env_file" ] && [ -f "$default_env" ]; then
@@ -513,13 +516,6 @@ write_env_file() {
 
     chmod 600 "$env_file"
     print_success "Configuration saved to $env_file"
-
-    # Symlink ~/.claude/memory/.env -> easyclaw/.env
-    # The telegram bot and MCP server look for .env there
-    local memory_dir="${USER_HOME}/.claude/memory"
-    mkdir -p "$memory_dir"
-    ln -sf "$env_file" "$memory_dir/.env"
-    log "INFO" "Symlinked $memory_dir/.env -> $env_file"
 }
 
 # Step 6b: Install clawdy-mcp Python server and register in Claude settings
@@ -591,6 +587,64 @@ install_start_script() {
     chmod +x "$dest"
     print_success "Installed claude-start.sh"
     log "INFO" "claude-start.sh written to $dest"
+}
+
+# Step 7b: Create workspace directory
+create_workspace() {
+    print_info "Creating workspace directory ~/.easyclaw/..."
+    mkdir -p "${USER_HOME}/.easyclaw/scripts"
+    print_success "Workspace directory created: ${USER_HOME}/.easyclaw/"
+    log "INFO" "Created ${USER_HOME}/.easyclaw/ and scripts/"
+}
+
+# Step 7c: Install scripts to ~/.easyclaw/scripts/
+install_scripts() {
+    print_info "Installing scripts to ~/.easyclaw/scripts/..."
+    mkdir -p "${USER_HOME}/.easyclaw/scripts"
+
+    # Copy typing loop
+    if [ -f "$SCRIPT_DIR/clawdy-typing-loop.py" ]; then
+        cp "$SCRIPT_DIR/clawdy-typing-loop.py" "${USER_HOME}/.easyclaw/scripts/"
+        print_success "Installed clawdy-typing-loop.py"
+    else
+        print_warn "clawdy-typing-loop.py not found in $SCRIPT_DIR — skipping"
+    fi
+
+    # Copy cron check
+    if [ -f "$SCRIPT_DIR/clawdy-cron-check.sh" ]; then
+        cp "$SCRIPT_DIR/clawdy-cron-check.sh" "${USER_HOME}/.easyclaw/scripts/"
+        chmod +x "${USER_HOME}/.easyclaw/scripts/clawdy-cron-check.sh"
+        print_success "Installed clawdy-cron-check.sh"
+    else
+        print_warn "clawdy-cron-check.sh not found in $SCRIPT_DIR — skipping"
+    fi
+
+    # Copy daily briefing if it exists
+    if [ -f "$SCRIPT_DIR/clawdy-daily-briefing.sh" ]; then
+        cp "$SCRIPT_DIR/clawdy-daily-briefing.sh" "${USER_HOME}/.easyclaw/scripts/"
+        chmod +x "${USER_HOME}/.easyclaw/scripts/clawdy-daily-briefing.sh"
+        print_success "Installed clawdy-daily-briefing.sh"
+    fi
+
+    # Make all scripts executable
+    chmod +x "${USER_HOME}/.easyclaw/scripts/"*.sh 2>/dev/null || true
+    chmod +x "${USER_HOME}/.easyclaw/scripts/"*.py 2>/dev/null || true
+
+    # Set up crontab for cron check (idempotent — removes old entry first)
+    local cron_line="*/30 * * * * ${USER_HOME}/.easyclaw/scripts/clawdy-cron-check.sh"
+    ( crontab -l 2>/dev/null | grep -v "clawdy-cron-check" ; echo "$cron_line" ) | crontab -
+    print_success "Crontab updated: cron check every 30 min"
+    log "INFO" "Crontab entry: $cron_line"
+
+    # Set up daily briefing cron if the script was installed
+    if [ -f "${USER_HOME}/.easyclaw/scripts/clawdy-daily-briefing.sh" ]; then
+        local briefing_line="0 8 * * * ${USER_HOME}/.easyclaw/scripts/clawdy-daily-briefing.sh"
+        ( crontab -l 2>/dev/null | grep -v "clawdy-daily-briefing" ; echo "$briefing_line" ) | crontab -
+        print_success "Crontab updated: daily briefing at 8am"
+        log "INFO" "Crontab entry: $briefing_line"
+    fi
+
+    print_success "Scripts installed"
 }
 
 # Step 8: Install systemd services
@@ -720,12 +774,14 @@ main() {
         sleep 1
     fi
 
+    is_done "workspace"    || { create_workspace; mark_done "workspace"; }
     is_done "oauth"        || { first_launch_claude; mark_done "oauth"; }
     is_done "claude_json"  || { patch_claude_json; mark_done "claude_json"; }
     is_done "identity"     || { install_bot_identity; mark_done "identity"; }
     is_done "env_file"     || { write_env_file; mark_done "env_file"; }
     is_done "mcp_server"   || { install_mcp_server; mark_done "mcp_server"; }
     is_done "start_script" || { install_start_script; mark_done "start_script"; }
+    is_done "scripts"      || { install_scripts; mark_done "scripts"; }
 
     # Stop any running services before reinstalling
     for service_file in "$SCRIPT_DIR"/services/*.service; do
