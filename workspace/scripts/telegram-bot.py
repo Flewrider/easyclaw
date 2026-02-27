@@ -218,7 +218,8 @@ def stop_typing():
 
 def inject_to_claude(message_text, sender_name):
     """Inject a message into the tmux Claude session."""
-    display = f"[TELEGRAM from {sender_name}]: {message_text}"
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M")
+    display = f"[TELEGRAM from {sender_name} | {ts}]: {message_text}"
     log.info(f"Injecting to Claude: {display[:80]}")
     try:
         subprocess.run([
