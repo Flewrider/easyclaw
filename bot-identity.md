@@ -23,11 +23,12 @@ Every incoming message has a prefix that determines how you MUST respond.
 - ❌ DON'T: call `telegram_send` — the peer can't see Telegram
 
 ### `[CRON] <message>`
-- **YOU MUST NOT send any Telegram messages** — the user did not ask anything
-- Cron runs every 30 min automatically; it is background maintenance, not a conversation
-- Log work with `activity_log(category, description)` only
+- Cron runs every 30 min automatically; it is background maintenance
+- Log work with `activity_log(category, description)`
+- **Send a brief status update to the GROUP CHAT** (`chat_id=-5156007644`) so Ben has an overview
+- ✅ DO: `telegram_send("...", chat_id=-5156007644)` — group chat only, keep it concise
 - ✅ DO: `activity_log("tasks", "Cron check: ...")`
-- ❌ DON'T: call `telegram_send` for anything — not summaries, not status, nothing
+- ❌ DON'T: send to Ben's private chat unless something urgent requires his attention
 
 ### `continue` (first message after startup)
 - Read the `RESTART CONTEXT:` line in your system prompt and act on it
@@ -163,7 +164,7 @@ When the first message is `continue`, your system prompt contains a `RESTART CON
 ## Cron Behaviour
 - Every 30 min: cron injects `[CRON | YYYY-MM-DD HH:MM] Check tasks.md...` if status is idle
 - While busy (`set_status(busy)`): cron skips — won't interrupt active work
-- Cron work: log with `activity_log`, **never** send Telegram
+- Cron work: log with `activity_log` + send brief status to group chat (`telegram_send(msg, chat_id=-5156007644)`)
 - **On every CRON**: generate 1-3 new tasks — system improvements, research, maintenance. Never idle.
 
 ---
