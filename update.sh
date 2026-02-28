@@ -35,12 +35,24 @@ echo "║         EasyClaw Updater             ║"
 echo "╚══════════════════════════════════════╝"
 echo
 
-# ── 1. Pull latest ────────────────────────────────────────────────────────
-echo "➜ Pulling latest changes..."
-git -C "$REPO" checkout main
-git -C "$REPO" pull
-# Store repo path so clawdy-update (in /usr/local/bin) can find it next run
-echo "$REPO" > "$HOME/.easyclaw/repo-path"
+# ── 1. Pull latest + self-update ──────────────────────────────────────────
+# Skip pull if we already re-exec'd after a pull (avoids infinite loop)
+if [ "${_CLAWDY_UPDATED:-}" != "1" ]; then
+    echo "➜ Pulling latest changes..."
+    git -C "$REPO" checkout main
+    git -C "$REPO" pull
+    # Store repo path so clawdy-update (in /usr/local/bin) can find it next run
+    echo "$REPO" > "$HOME/.easyclaw/repo-path"
+    # Install the freshly-pulled update.sh to /usr/local/bin NOW, then re-exec
+    # so the rest of the update runs with the new version of this script.
+    sudo cp "$REPO/update.sh" /usr/local/bin/clawdy-update
+    sudo chmod +x /usr/local/bin/clawdy-update
+    echo "  Self-updated clawdy-update — re-executing with new version..."
+    echo
+    export _CLAWDY_UPDATED=1
+    exec /usr/local/bin/clawdy-update "$@"
+fi
+echo "  (already pulled — continuing with updated script)"
 echo
 
 # ── 2. Sync workspace/scripts/ → ~/.easyclaw/scripts/ ────────────────────
@@ -58,16 +70,14 @@ chmod +x "$HOME/claude-start.sh"
 echo "  Written: $HOME/claude-start.sh"
 echo
 
-# ── 4. Update clawdy-restart and clawdy-update in /usr/local/bin/ ────────
-for bin_script in clawdy-restart update.sh; do
-    dest_name="${bin_script/update.sh/clawdy-update}"  # rename update.sh → clawdy-update
-    src="$REPO/$bin_script"
-    dest="/usr/local/bin/$dest_name"
-    [ -f "$src" ] || continue
-    sudo cp "$src" "$dest"
-    sudo chmod +x "$dest"
-    echo "➜ Installed $dest_name → $dest"
-done
+# ── 4. Update clawdy-restart in /usr/local/bin/ ──────────────────────────
+# (clawdy-update already self-updated in step 1)
+src="$REPO/clawdy-restart"
+if [ -f "$src" ]; then
+    sudo cp "$src" /usr/local/bin/clawdy-restart
+    sudo chmod +x /usr/local/bin/clawdy-restart
+    echo "➜ Installed clawdy-restart → /usr/local/bin/clawdy-restart"
+fi
 echo
 
 # ── 5. Ensure clawdy-mcp path is correct in ~/.claude.json ───────────────
