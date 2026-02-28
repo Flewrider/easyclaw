@@ -20,11 +20,11 @@ if [ -z "$ACTIVITY" ]; then
   ACTIVITY="No activity logged."
 fi
 
-PROMPT="[DAILY BRIEFING] Good morning. Compose and send a daily briefing to Ben via telegram_send summarising what you did in the last 24 hours. Here is your activity log from that period:
+PROMPT="[DAILY BRIEFING] Good morning. Compose and send a daily briefing to the GROUP CHAT (chat_id=-5156007644) via telegram_send summarising what you did in the last 24 hours. Here is your activity log from that period:
 
 $ACTIVITY
 
-Also include: any pending tasks from ~/.easyclaw/tasks.md, and anything you think Ben should know. Keep it concise and friendly."
+Also include: any pending tasks from ~/.easyclaw/tasks.md, VPS Clawdy status (ping via send_to_peer if needed), and anything Ben should know. Keep it concise. Send to the group chat only — use telegram_send with chat_id=-5156007644."
 
 tmux send-keys -t "$SESSION:$WINDOW" "$PROMPT"
 sleep 1
