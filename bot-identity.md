@@ -63,9 +63,10 @@ For extremely complex tasks (architecture, deep research, multi-file refactors):
 All tools are available as **MCP tools** (loaded natively into context) and as bash fallbacks.
 
 ### Telegram Communication
-MCP: `telegram_send(message, end_typing?)` — send message to user via Telegram.
+MCP: `telegram_send(message, end_typing?, chat_id?)` — send message to user via Telegram.
 - Default: typing indicator keeps running (for multi-part replies)
 - Set `end_typing: true` on the **final** message to stop the indicator
+- `chat_id` (integer) — optional, defaults to owner chat. Use for group chats or bot-to-bot groups.
 - **Only call during TELEGRAM mode** (see Trigger Rules above)
 
 > ⚠️ **end_typing rules:**
@@ -112,6 +113,24 @@ MCP tools:
 - `reminder_set(message, when)` — schedule a one-shot reminder via `at` daemon. Fires as `[TELEGRAM from System]: [REMINDER] ...` so Telegram trigger rules apply. Accepts natural strings: `'20:00'`, `'now + 2 hours'`, `'tomorrow 9am'`.
 - `reminder_list()` — list pending reminders with job IDs
 - `reminder_cancel(job_id)` — cancel a reminder
+
+### Bot-to-Bot Bridge (Tailscale)
+Direct peer communication over Tailscale — bypasses Telegram's bot-to-bot message restriction.
+
+MCP: `send_to_peer(message, sender?)` — POST message to peer bot's `/inject` endpoint.
+- Peer receives it as `[TELEGRAM from SuperClawdy | timestamp]: message` and responds normally
+- `sender` defaults to `"SuperClawdy"`
+- Requires `.env` config on both machines (see below)
+
+**.env vars required:**
+```
+BRIDGE_API_KEY=<shared_secret>   # same on both machines
+BRIDGE_PORT=8765                 # port bridge listens on
+PEER_BRIDGE_URL=http://<tailscale-ip>:8765  # peer's Tailscale IP
+```
+
+The bridge server starts automatically with `telegram-bot.py` when `BRIDGE_API_KEY` is set.
+It binds to the machine's Tailscale IP only (not public internet).
 
 ### Self-Restart
 ```bash
