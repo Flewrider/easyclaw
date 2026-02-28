@@ -56,7 +56,6 @@ TASKS_FILE    = EASYCLAW / "tasks.md"
 AGENT_LOG     = EASYCLAW / "agent-sessions.jsonl"
 STOP_TYPING   = EASYCLAW / "stop-typing"
 REMINDERS_FILE = EASYCLAW / "reminders.json"
-PENDING_ACKS_FILE = EASYCLAW / "pending_acks.json"
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -310,36 +309,12 @@ def impl_telegram_send_file(file_path: str, caption: str | None = None) -> str:
         return f"Error sending file: {e}"
 
 
-def _gen_msg_id() -> str:
-    import uuid
-    return uuid.uuid4().hex[:8]
-
-
-def _add_pending_ack(msg_id: str, preview: str) -> None:
-    data: dict = {}
-    if PENDING_ACKS_FILE.exists():
-        try:
-            data = json.loads(PENDING_ACKS_FILE.read_text())
-        except Exception:
-            pass
-    data[msg_id] = {"preview": preview[:80], "sent_at": datetime.now().isoformat(), "alerted": False}
-    PENDING_ACKS_FILE.write_text(json.dumps(data, indent=2))
-
-
-def _remove_pending_ack(msg_id: str) -> None:
-    if not PENDING_ACKS_FILE.exists():
-        return
-    try:
-        data = json.loads(PENDING_ACKS_FILE.read_text())
-        if msg_id in data:
-            del data[msg_id]
-            PENDING_ACKS_FILE.write_text(json.dumps(data, indent=2))
-    except Exception:
-        pass
-
-
 def impl_send_to_peer(message: str, sender: str = "SuperClawdy") -> str:
-    """POST a message to the peer bot's bridge /inject endpoint over Tailscale."""
+    """POST a message to the peer bot's bridge /inject endpoint over Tailscale.
+
+    HTTP 200 = bridge confirmed receipt and tmux inject succeeded = delivered.
+    On failure, alerts Ben via Telegram immediately.
+    """
     import requests as _req
     env = load_env()
     peer_url = env.get("PEER_BRIDGE_URL", "").rstrip("/")
@@ -348,23 +323,23 @@ def impl_send_to_peer(message: str, sender: str = "SuperClawdy") -> str:
         return "PEER_BRIDGE_URL not set in .env."
     if not api_key:
         return "BRIDGE_API_KEY not set in .env."
-    is_ack = message.startswith("[ACK] ")
-    msg_id = _gen_msg_id()
     ts = datetime.now().strftime("%Y-%m-%d %H:%M")
     try:
         r = _req.post(
             f"{peer_url}/inject",
-            json={"message": message, "sender": sender, "timestamp": ts, "msg_id": msg_id},
+            json={"message": message, "sender": sender, "timestamp": ts},
             headers={"X-API-Key": api_key},
             timeout=10,
         )
         if r.status_code == 200:
-            if not is_ack:
-                _add_pending_ack(msg_id, message)
             return f"Sent to peer: {message[:80]}"
-        return f"Peer returned {r.status_code}: {r.text}"
+        error = f"Peer bridge returned {r.status_code}: {r.text}"
+        impl_telegram_send(f"⚠️ Peer message failed to deliver:\n\"{message[:80]}\"\n{error}")
+        return error
     except Exception as e:
-        return f"Failed to reach peer: {e}"
+        error = f"Failed to reach peer bridge: {e}"
+        impl_telegram_send(f"⚠️ Peer bridge unreachable — message not delivered:\n\"{message[:80]}\"")
+        return error
 
 
 def impl_activity_log(category: str, description: str) -> str:

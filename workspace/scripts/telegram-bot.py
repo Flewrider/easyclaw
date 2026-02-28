@@ -25,8 +25,6 @@ CONFIG_FILE = EASYCLAW / "telegram-config.json"
 LOG_FILE = EASYCLAW / "telegram-bot.log"
 STOP_TYPING = EASYCLAW / "stop-typing"
 FILES_DIR = Path.home() / "telegram-files"  # overridden in main() from env
-PENDING_ACKS_FILE = EASYCLAW / "pending_acks.json"
-
 # Whisper model (loaded once on first voice message, then cached)
 _whisper_model = None
 
@@ -298,10 +296,6 @@ def main():
     bridge_port = int(env.get("BRIDGE_PORT", "8765"))
     if bridge_key:
         start_bridge_server(bridge_key, bridge_port)
-        # Start ACK monitor — alerts Ben if peer messages go unACKed for >2min
-        owner_chat = cfg["allowed_chats"][0] if cfg.get("allowed_chats") else None
-        if owner_chat:
-            start_ack_monitor(token, owner_chat)
 
     # Verify bot token works
     me = tg_request(token, "getMe")
@@ -452,49 +446,6 @@ def main():
                 send_message(token, chat_id, "⚠️ Failed to reach Clawdy session. Is it running?")
 
 
-def _remove_pending_ack(msg_id: str) -> None:
-    if not PENDING_ACKS_FILE.exists():
-        return
-    try:
-        data = json.loads(PENDING_ACKS_FILE.read_text())
-        if msg_id in data:
-            del data[msg_id]
-            PENDING_ACKS_FILE.write_text(json.dumps(data, indent=2))
-            log.info(f"ACK received and cleared: {msg_id}")
-    except Exception as e:
-        log.error(f"Failed to remove pending ack {msg_id}: {e}")
-
-
-def start_ack_monitor(token: str, chat_id: int):
-    """Background thread: alert via Telegram if any peer message goes >2 min unACKed."""
-    def _loop():
-        while True:
-            time.sleep(30)
-            if not PENDING_ACKS_FILE.exists():
-                continue
-            try:
-                data = json.loads(PENDING_ACKS_FILE.read_text())
-                now = datetime.now()
-                changed = False
-                for msg_id, info in list(data.items()):
-                    sent_at = datetime.fromisoformat(info["sent_at"])
-                    age_s = (now - sent_at).total_seconds()
-                    if age_s > 120 and not info.get("alerted"):
-                        preview = info.get("preview", "?")[:60]
-                        send_message(token, chat_id,
-                            f"⚠️ Peer message not ACKed after {int(age_s)}s — may not have been received:\n\"{preview}\"")
-                        data[msg_id]["alerted"] = True
-                        changed = True
-                if changed:
-                    PENDING_ACKS_FILE.write_text(json.dumps(data, indent=2))
-            except Exception as e:
-                log.error(f"ACK monitor error: {e}")
-
-    t = threading.Thread(target=_loop, daemon=True)
-    t.start()
-    log.info("Peer ACK monitor started (30s check interval, 2min timeout)")
-
-
 def start_bridge_server(api_key: str, port: int):
     """Start a lightweight HTTP server for bot-to-bot injection over Tailscale."""
 
@@ -522,7 +473,6 @@ def start_bridge_server(api_key: str, port: int):
                 message = data.get("message", "").strip()
                 sender = data.get("sender", "Peer")
                 ts = data.get("timestamp", datetime.now().strftime("%Y-%m-%d %H:%M"))
-                msg_id = data.get("msg_id", "")
             except Exception:
                 self.send_response(400)
                 self.end_headers()
@@ -535,22 +485,9 @@ def start_bridge_server(api_key: str, port: int):
                 self.wfile.write(b"No message")
                 return
 
-            # Intercept ACK messages — remove from pending_acks, don't inject to Claude
-            if message.startswith("[ACK] "):
-                ack_id = message[6:].strip()
-                _remove_pending_ack(ack_id)
-                self.send_response(200)
-                self.end_headers()
-                self.wfile.write(b"ack processed")
-                return
-
             log.info(f"Bridge inject from {sender}: {message[:80]}")
-            # Build display string with sender's timestamp and msg_id for ACK tracking
             # Use [PEER from ...] prefix so the bot's PEER trigger rule fires (not TELEGRAM)
-            if msg_id:
-                display = f"[PEER from {sender} | {ts} | id:{msg_id}]: {message}"
-            else:
-                display = f"[PEER from {sender} | {ts}]: {message}"
+            display = f"[PEER from {sender} | {ts}]: {message}"
             try:
                 subprocess.run(["tmux", "send-keys", "-t", f"{TMUX_SESSION}:{TMUX_WINDOW}", display], check=True)
                 time.sleep(0.3)
