@@ -319,10 +319,11 @@ def impl_send_to_peer(message: str, sender: str = "SuperClawdy") -> str:
         return "PEER_BRIDGE_URL not set in .env."
     if not api_key:
         return "BRIDGE_API_KEY not set in .env."
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M")
     try:
         r = _req.post(
             f"{peer_url}/inject",
-            json={"message": message, "sender": sender},
+            json={"message": message, "sender": sender, "timestamp": ts},
             headers={"X-API-Key": api_key},
             timeout=10,
         )

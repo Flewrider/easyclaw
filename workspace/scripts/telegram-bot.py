@@ -473,6 +473,7 @@ def start_bridge_server(api_key: str, port: int):
                 data = json.loads(body)
                 message = data.get("message", "").strip()
                 sender = data.get("sender", "Peer")
+                ts = data.get("timestamp", datetime.now().strftime("%Y-%m-%d %H:%M"))
             except Exception:
                 self.send_response(400)
                 self.end_headers()
@@ -486,7 +487,16 @@ def start_bridge_server(api_key: str, port: int):
                 return
 
             log.info(f"Bridge inject from {sender}: {message[:80]}")
-            ok = inject_to_claude(message, sender)
+            # Build display string with sender's timestamp (skip inject_to_claude to avoid double-stamp)
+            display = f"[TELEGRAM from {sender} | {ts}]: {message}"
+            try:
+                subprocess.run(["tmux", "send-keys", "-t", f"{TMUX_SESSION}:{TMUX_WINDOW}", display], check=True)
+                time.sleep(0.3)
+                subprocess.run(["tmux", "send-keys", "-t", f"{TMUX_SESSION}:{TMUX_WINDOW}", "", "Enter"], check=True)
+                ok = True
+            except subprocess.CalledProcessError as e:
+                log.error(f"Bridge tmux inject failed: {e}")
+                ok = False
             self.send_response(200 if ok else 500)
             self.end_headers()
             self.wfile.write(b"ok" if ok else b"inject failed")
