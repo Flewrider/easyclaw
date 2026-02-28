@@ -348,6 +348,7 @@ def impl_send_to_peer(message: str, sender: str = "SuperClawdy") -> str:
         return "PEER_BRIDGE_URL not set in .env."
     if not api_key:
         return "BRIDGE_API_KEY not set in .env."
+    is_ack = message.startswith("[ACK] ")
     msg_id = _gen_msg_id()
     ts = datetime.now().strftime("%Y-%m-%d %H:%M")
     try:
@@ -358,7 +359,8 @@ def impl_send_to_peer(message: str, sender: str = "SuperClawdy") -> str:
             timeout=10,
         )
         if r.status_code == 200:
-            _add_pending_ack(msg_id, message)
+            if not is_ack:
+                _add_pending_ack(msg_id, message)
             return f"Sent to peer: {message[:80]}"
         return f"Peer returned {r.status_code}: {r.text}"
     except Exception as e:
