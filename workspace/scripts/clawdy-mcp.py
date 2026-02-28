@@ -313,8 +313,10 @@ def impl_send_to_peer(message: str, sender: str = "SuperClawdy") -> str:
     """POST a message to the peer bot's bridge /inject endpoint over Tailscale.
 
     HTTP 200 = bridge confirmed receipt and tmux inject succeeded = delivered.
-    On failure, retries once after 30s. Alerts Ben only if retry also fails.
+    On failure, spawns a background thread to retry after 30s so Claude
+    isn't blocked. Alerts Ben only if retry also fails.
     """
+    import threading as _threading
     import time as _time
     import requests as _req
     env = load_env()
@@ -344,15 +346,15 @@ def impl_send_to_peer(message: str, sender: str = "SuperClawdy") -> str:
     if ok:
         return f"Sent to peer: {message[:80]}"
 
-    # First attempt failed — retry once after 30s
-    _time.sleep(30)
-    ok, err2 = _attempt()
-    if ok:
-        return f"Sent to peer (retry): {message[:80]}"
+    # First attempt failed — retry in background so MCP isn't blocked for 30s
+    def _retry():
+        _time.sleep(30)
+        ok2, err2 = _attempt()
+        if not ok2:
+            impl_telegram_send(f"⚠️ Peer message failed after retry:\n\"{message[:80]}\"\n{err2}")
 
-    # Both failed — alert Ben
-    impl_telegram_send(f"⚠️ Peer message failed after retry:\n\"{message[:80]}\"\n{err2}")
-    return f"Failed to reach peer: {err2}"
+    _threading.Thread(target=_retry, daemon=True).start()
+    return f"Sent to peer (retry pending): {message[:80]}"
 
 
 def impl_activity_log(category: str, description: str) -> str:
