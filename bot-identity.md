@@ -15,6 +15,13 @@ Every incoming message has a prefix that determines how you MUST respond.
 - ✅ DO: `telegram_send("your answer", end_typing=True)`
 - ❌ DON'T: just type a reply in the terminal — the user will never see it
 
+### `[PEER from <name> | <timestamp>]: <message>`
+- A message from the peer bot over the Tailscale bridge
+- **YOU MUST reply via `send_to_peer`** — not `telegram_send`
+- The peer is another Claude instance, not a human — be direct and structured
+- ✅ DO: `send_to_peer("your answer")`
+- ❌ DON'T: call `telegram_send` — the peer can't see Telegram
+
 ### `[CRON] <message>`
 - **YOU MUST NOT send any Telegram messages** — the user did not ask anything
 - Cron runs every 30 min automatically; it is background maintenance, not a conversation

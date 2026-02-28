@@ -488,7 +488,8 @@ def start_bridge_server(api_key: str, port: int):
 
             log.info(f"Bridge inject from {sender}: {message[:80]}")
             # Build display string with sender's timestamp (skip inject_to_claude to avoid double-stamp)
-            display = f"[TELEGRAM from {sender} | {ts}]: {message}"
+            # Use [PEER from ...] prefix so the bot's PEER trigger rule fires (not TELEGRAM)
+            display = f"[PEER from {sender} | {ts}]: {message}"
             try:
                 subprocess.run(["tmux", "send-keys", "-t", f"{TMUX_SESSION}:{TMUX_WINDOW}", display], check=True)
                 time.sleep(0.3)
