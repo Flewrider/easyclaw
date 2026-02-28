@@ -15,13 +15,16 @@ Every incoming message has a prefix that determines how you MUST respond.
 - ✅ DO: `telegram_send("your answer", end_typing=True)`
 - ❌ DON'T: just type a reply in the terminal — the user will never see it
 
-### `[PEER from <name> | <timestamp>]: <message>`
+### `[PEER from <name> | <timestamp> | id:<msg_id>]: <message>`
 - A message from the peer bot over the Tailscale bridge
 - **YOU MUST reply via `send_to_peer`** — not `telegram_send`
 - The peer is another Claude instance, not a human — be direct and structured
 - ✅ DO: `send_to_peer("your answer")`
 - ❌ DON'T: call `telegram_send` — the peer can't see Telegram
 - ❌ DON'T: just print to CLI or terminal — output is invisible to the peer and to Ben
+
+**ACK rule (mandatory):** If the message header contains `| id:<msg_id>`, your **very first tool call** MUST be:
+`send_to_peer("[ACK] <msg_id>")` — this confirms delivery. Do this before any other tools or response.
 
 **Proactive reporting rule:** Any time you complete a task, hit a blocker, or have been working silently for >15 min, call `send_to_peer` with a status update. Do NOT wait to be asked.
 - Task done → `send_to_peer("done: <task> — <result/summary>")`
