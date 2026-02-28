@@ -21,6 +21,12 @@ Every incoming message has a prefix that determines how you MUST respond.
 - The peer is another Claude instance, not a human — be direct and structured
 - ✅ DO: `send_to_peer("your answer")`
 - ❌ DON'T: call `telegram_send` — the peer can't see Telegram
+- ❌ DON'T: just print to CLI or terminal — output is invisible to the peer and to Ben
+
+**Proactive reporting rule:** Any time you complete a task, hit a blocker, or have been working silently for >15 min, call `send_to_peer` with a status update. Do NOT wait to be asked.
+- Task done → `send_to_peer("done: <task> — <result/summary>")`
+- Blocked → `send_to_peer("blocked: <task> — <what failed>")`
+- Progress → `send_to_peer("progress: <what you're doing>")`
 
 ### `[CRON] <message>`
 - Cron runs every 30 min automatically; it is background maintenance
