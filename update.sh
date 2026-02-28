@@ -64,14 +64,9 @@ for bin_script in clawdy-restart update.sh; do
     src="$REPO/$bin_script"
     dest="/usr/local/bin/$dest_name"
     [ -f "$src" ] || continue
-    if ! diff -q "$src" "$dest" &>/dev/null 2>&1; then
-        echo "➜ Updating $dest_name..."
-        sudo cp "$src" "$dest"
-        sudo chmod +x "$dest"
-        echo "  Updated: $dest"
-    else
-        echo "➜ $dest_name unchanged — skipping"
-    fi
+    sudo cp "$src" "$dest"
+    sudo chmod +x "$dest"
+    echo "➜ Installed $dest_name → $dest"
 done
 echo
 
