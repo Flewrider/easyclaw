@@ -313,8 +313,9 @@ def impl_send_to_peer(message: str, sender: str = "SuperClawdy") -> str:
     """POST a message to the peer bot's bridge /inject endpoint over Tailscale.
 
     HTTP 200 = bridge confirmed receipt and tmux inject succeeded = delivered.
-    On failure, alerts Ben via Telegram immediately.
+    On failure, retries once after 30s. Alerts Ben only if retry also fails.
     """
+    import time as _time
     import requests as _req
     env = load_env()
     peer_url = env.get("PEER_BRIDGE_URL", "").rstrip("/")
@@ -323,23 +324,35 @@ def impl_send_to_peer(message: str, sender: str = "SuperClawdy") -> str:
         return "PEER_BRIDGE_URL not set in .env."
     if not api_key:
         return "BRIDGE_API_KEY not set in .env."
-    ts = datetime.now().strftime("%Y-%m-%d %H:%M")
-    try:
-        r = _req.post(
-            f"{peer_url}/inject",
-            json={"message": message, "sender": sender, "timestamp": ts},
-            headers={"X-API-Key": api_key},
-            timeout=10,
-        )
-        if r.status_code == 200:
-            return f"Sent to peer: {message[:80]}"
-        error = f"Peer bridge returned {r.status_code}: {r.text}"
-        impl_telegram_send(f"⚠️ Peer message failed to deliver:\n\"{message[:80]}\"\n{error}")
-        return error
-    except Exception as e:
-        error = f"Failed to reach peer bridge: {e}"
-        impl_telegram_send(f"⚠️ Peer bridge unreachable — message not delivered:\n\"{message[:80]}\"")
-        return error
+
+    def _attempt() -> tuple[bool, str]:
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M")
+        try:
+            r = _req.post(
+                f"{peer_url}/inject",
+                json={"message": message, "sender": sender, "timestamp": ts},
+                headers={"X-API-Key": api_key},
+                timeout=10,
+            )
+            if r.status_code == 200:
+                return True, ""
+            return False, f"bridge returned {r.status_code}: {r.text}"
+        except Exception as e:
+            return False, f"unreachable: {e}"
+
+    ok, err = _attempt()
+    if ok:
+        return f"Sent to peer: {message[:80]}"
+
+    # First attempt failed — retry once after 30s
+    _time.sleep(30)
+    ok, err2 = _attempt()
+    if ok:
+        return f"Sent to peer (retry): {message[:80]}"
+
+    # Both failed — alert Ben
+    impl_telegram_send(f"⚠️ Peer message failed after retry:\n\"{message[:80]}\"\n{err2}")
+    return f"Failed to reach peer: {err2}"
 
 
 def impl_activity_log(category: str, description: str) -> str:
