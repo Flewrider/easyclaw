@@ -70,6 +70,6 @@ fi
 
 # Inject task check with [CRON] tag — no Telegram messages, log to activity log only
 CRON_TS=$(date '+%Y-%m-%d %H:%M')
-tmux send-keys -t "$SESSION:$WINDOW" "[CRON | ${CRON_TS}] Check ~/.easyclaw/tasks.md — if there are pending or in-progress tasks, continue working on them and update their status."
+tmux send-keys -t "$SESSION:$WINDOW" "[CRON | ${CRON_TS}] Check ~/.easyclaw/tasks.md — if there are pending or in-progress tasks, continue working on them and update their status. Also: (1) check on any running projects (FomoFollow trades/signals, Conway Automaton, meme pipeline) and update tasks.md if their status has changed; (2) if anything noteworthy is missing from tasks.md, create new tasks to track it."
 sleep 1
 tmux send-keys -t "$SESSION:$WINDOW" "" Enter
