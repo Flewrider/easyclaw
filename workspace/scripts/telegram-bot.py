@@ -49,9 +49,16 @@ def transcribe_voice(file_path: Path) -> str | None:
     if model is None:
         return None
     try:
-        segments, info = model.transcribe(str(file_path), beam_size=5)
+        # First pass: auto-detect language with VAD filter
+        segments, info = model.transcribe(str(file_path), beam_size=5, vad_filter=True)
         text = " ".join(seg.text.strip() for seg in segments).strip()
-        log.info(f"Transcribed voice ({info.language}, {info.duration:.1f}s): {text[:80]}")
+        log.info(f"Transcribed voice ({info.language}, prob={info.language_probability:.2f}, {info.duration:.1f}s): {text[:80]!r}")
+        # If empty and low confidence, retry with explicit German
+        if not text and info.language_probability < 0.7:
+            log.info("Low confidence / empty — retrying with language=de")
+            segments, info = model.transcribe(str(file_path), beam_size=5, vad_filter=True, language="de")
+            text = " ".join(seg.text.strip() for seg in segments).strip()
+            log.info(f"Retry (de): {text[:80]!r}")
         return text if text else None
     except Exception as e:
         log.error(f"Transcription failed: {e}")
