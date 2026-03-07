@@ -30,6 +30,7 @@ STOP_TYPING = EASYCLAW / "stop-typing"
 STATUS_FILE = EASYCLAW / "status"
 ACTIVITY_LOG = EASYCLAW / "activity-log.md"
 CHAT_HISTORY = EASYCLAW / "chat-history.jsonl"
+PENDING_QUEUE = EASYCLAW / "pending-injections.jsonl"  # persisted queue across restarts
 FILES_DIR = Path.home() / "telegram-files"  # overridden in main() from env
 
 # Whisper model (loaded once on first voice message, then cached)
@@ -302,6 +303,19 @@ const SRC_BADGES = {
 
 function esc(t) { return String(t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
+function renderMarkdown(text) {
+  let s = esc(text);
+  // Bold
+  s = s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  // Italic (but not inside bold)
+  s = s.replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, '<em>$1</em>');
+  // Inline code
+  s = s.replace(/`([^`\n]+)`/g, '<code style="background:#2a2a2a;padding:1px 5px;border-radius:4px;font-size:12px;font-family:monospace">$1</code>');
+  // Headers → bold line
+  s = s.replace(/^#{1,3} (.+)$/gm, '<strong>$1</strong>');
+  return s;
+}
+
 function renderMsg(m, prepend=false) {
   const id = m.ts + '|' + m.dir + '|' + m.sender + '|' + (m.text||'').slice(0,20);
   if (_seenIds.has(id)) return;
@@ -330,7 +344,7 @@ function renderMsg(m, prepend=false) {
     : '<div class="bubble-meta">'+badge+sender+'</div>';
 
   wrap.innerHTML = metaHtml
-    + '<div class="bubble">'+esc(m.text||'')+'</div>'
+    + '<div class="bubble">'+renderMarkdown(m.text||'')+'</div>'
     + '<div class="bubble-time">'+ts+'</div>';
 
   const loadMoreBtn = document.getElementById('load-more');
@@ -633,21 +647,68 @@ def log_chat_history(direction: str, sender: str, text: str, source: str = ""):
         log.debug(f"chat history write failed: {e}")
 
 
+def persist_pending(item: dict):
+    """Append a queue item to the pending-injections file (survives bridge restarts)."""
+    try:
+        with open(PENDING_QUEUE, "a") as f:
+            f.write(json.dumps(item) + "\n")
+    except Exception as e:
+        log.debug(f"pending queue write failed: {e}")
+
+
+def clear_pending():
+    """Clear the pending queue file (called after successful injection)."""
+    try:
+        PENDING_QUEUE.write_text("")
+    except Exception:
+        pass
+
+
+def load_pending_queue():
+    """On startup, reload any uninjected messages from the pending queue file."""
+    if not PENDING_QUEUE.exists():
+        return
+    try:
+        lines = PENDING_QUEUE.read_text().splitlines()
+        count = 0
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                item = json.loads(line)
+                _inject_queue.put(item)
+                count += 1
+            except Exception:
+                pass
+        if count:
+            log.info(f"Loaded {count} pending injection(s) from disk queue")
+        PENDING_QUEUE.write_text("")  # clear after loading
+    except Exception as e:
+        log.warning(f"Failed to load pending queue: {e}")
+
+
 def enqueue_injection(text: str, sender: str, source: str = "telegram"):
     """Queue a message for serialized injection. Thread-safe.
 
     Adds the appropriate trigger-rule prefix based on source:
     - telegram / dashboard → [TELEGRAM from {sender} | {ts}]: {text}
-    - peer                 → text already pre-formatted as [PEER from ...]
-    - cron / other         → text already pre-formatted by caller
+    - peer                 → [PEER from {sender} | {ts}]: {text}
+    - cron                 → [CRON | {ts}] {text}
+    - restart              → text injected as-is (plain "continue")
+    - other                → text injected as-is
     """
     ts = datetime.now().strftime("%Y-%m-%d %H:%M")
     if source in ("telegram", "dashboard"):
         display = f"[TELEGRAM from {sender} | {ts}]: {text}"
+    elif source == "cron":
+        display = f"[CRON | {ts}] {text}"
     else:
-        # peer, cron, and restart context are pre-formatted by their callers
+        # peer (pre-formatted), restart ("continue"), and others pass through as-is
         display = text
-    _inject_queue.put({"display": display, "sender": sender, "source": source})
+    item = {"display": display, "sender": sender, "source": source}
+    _inject_queue.put(item)
+    persist_pending(item)
     log_chat_history("in", sender, text, source=source)
     log.debug(f"Queued [{source}] from {sender}: {text[:60]}")
 
@@ -680,6 +741,15 @@ def start_injector_thread():
                     inject_to_claude(item["display"])
                     # Brief gap to avoid tmux key collision on back-to-back messages
                     time.sleep(0.4)
+                    # Rewrite pending file without the item just injected
+                    # (simplest: clear whole file since queue order is maintained in-memory)
+                    try:
+                        remaining = list(_inject_queue.queue)
+                        PENDING_QUEUE.write_text(
+                            "\n".join(json.dumps(i) for i in remaining) + ("\n" if remaining else "")
+                        )
+                    except Exception:
+                        pass
             except _queue_module.Empty:
                 continue
             except Exception as e:
@@ -777,10 +847,14 @@ class ClawdyHandler(BaseHTTPRequestHandler):
     def _handle_chat(self, data):
         msg = data.get("message", "").strip()
         sender = data.get("sender", "Ben (Dashboard)")
+        source = data.get("source", "dashboard")
+        # Only allow known safe sources via this endpoint
+        if source not in ("dashboard", "restart", "cron"):
+            source = "dashboard"
         if not msg:
             self._json({"ok": False, "error": "empty"}, 400)
             return
-        enqueue_injection(msg, sender, source="dashboard")
+        enqueue_injection(msg, sender, source=source)
         self._json({"ok": True, "queued": _inject_queue.qsize()})
 
     def _handle_restart(self):
@@ -1089,6 +1163,9 @@ def main():
         log.error(f"Bot token invalid: {me}")
         sys.exit(1)
     log.info(f"Bot @{me['result']['username']} connected. Allowed: {cfg['allowed_chats']}")
+
+    # Reload any messages queued before last bridge restart
+    load_pending_queue()
 
     # Start injection queue (serializes all tmux send-keys calls)
     start_injector_thread()
