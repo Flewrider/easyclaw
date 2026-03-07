@@ -273,6 +273,16 @@ def impl_telegram_send(message: str, end_typing: bool = False, chat_id: int | st
         else:
             return f"Failed to send chunk: {result}"
 
+    # Log outbound message to chat history (dashboard reads this)
+    try:
+        import json as _json, time as _time
+        hist = Path.home() / ".easyclaw" / "chat-history.jsonl"
+        with open(hist, "a") as _f:
+            _f.write(_json.dumps({"ts": _time.time(), "dir": "out", "sender": "Clawdy",
+                                  "text": message, "source": "out"}) + "\n")
+    except Exception:
+        pass
+
     sent_info = f"{len(message)} chars" if len(chunks) == 1 else f"{len(message)} chars in {len(chunks)} parts"
     return f"Sent ({sent_info}). Typing indicator: {'stopped' if end_typing else 'still running'}."
 

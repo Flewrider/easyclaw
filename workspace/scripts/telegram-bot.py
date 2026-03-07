@@ -29,6 +29,7 @@ LOG_FILE = EASYCLAW / "telegram-bot.log"
 STOP_TYPING = EASYCLAW / "stop-typing"
 STATUS_FILE = EASYCLAW / "status"
 ACTIVITY_LOG = EASYCLAW / "activity-log.md"
+CHAT_HISTORY = EASYCLAW / "chat-history.jsonl"
 FILES_DIR = Path.home() / "telegram-files"  # overridden in main() from env
 
 # Whisper model (loaded once on first voice message, then cached)
@@ -72,26 +73,38 @@ body{background:#0d1117;color:#c9d1d9;font-family:'Segoe UI',system-ui,sans-seri
 #app{display:flex;flex-direction:column;height:100vh}
 #header{background:#161b22;border-bottom:1px solid #30363d;padding:8px 16px;display:flex;align-items:center;gap:12px;flex-shrink:0}
 #header h1{font-size:15px;font-weight:600;color:#58a6ff;letter-spacing:.3px}
-.dot{width:8px;height:8px;border-radius:50%;background:#3fb950;flex-shrink:0}
-.dot.busy{background:#f78166}
+.dot{width:8px;height:8px;border-radius:50%;background:#3fb950;flex-shrink:0;transition:background .4s}
+.dot.busy{background:#e3b341}
+.dot.offline{background:#f78166}
 .dot.unknown{background:#8b949e}
 #status-text{font-size:12px;color:#8b949e}
 #queue-badge{background:#30363d;border-radius:10px;padding:2px 8px;font-size:11px;color:#e3b341;display:none}
 #ts-label{margin-left:auto;font-size:11px;color:#484f58}
 #main{display:flex;flex:1;min-height:0}
 #terminal-pane{flex:1;display:flex;flex-direction:column;min-width:0}
-#terminal{flex:1;overflow-y:auto;background:#0d1117;padding:12px 14px;font-family:'Courier New',Courier,monospace;font-size:12px;line-height:1.45;white-space:pre-wrap;word-break:break-all;color:#c9d1d9}
+#terminal{flex:1;overflow-y:auto;overflow-x:hidden;background:#0d1117;padding:12px 14px;font-family:'Courier New',Courier,monospace;font-size:12px;line-height:1.45;white-space:pre-wrap;overflow-wrap:break-word;word-break:break-word;color:#c9d1d9}
 #terminal::-webkit-scrollbar{width:6px}
 #terminal::-webkit-scrollbar-thumb{background:#30363d;border-radius:3px}
 #sidebar{width:360px;flex-shrink:0;display:flex;flex-direction:column;border-left:1px solid #30363d;background:#0d1117}
+@media(max-width:700px){
+  #main{flex-direction:column}
+  #terminal-pane{height:45vh;flex:none}
+  #sidebar{width:100%;border-left:none;border-top:1px solid #30363d;flex:1}
+}
 .section-hdr{padding:7px 12px;background:#161b22;border-bottom:1px solid #30363d;font-size:11px;font-weight:600;color:#8b949e;text-transform:uppercase;letter-spacing:.6px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;user-select:none}
 #chat-section{flex:1;display:flex;flex-direction:column;min-height:0}
 #chat-log{flex:1;overflow-y:auto;padding:6px 8px}
 #chat-log::-webkit-scrollbar{width:4px}
 #chat-log::-webkit-scrollbar-thumb{background:#30363d}
-.msg{padding:4px 8px;border-radius:4px;margin-bottom:3px;font-size:12px;line-height:1.4;border-left:2px solid #58a6ff;background:#1c2128}
-.msg .ts{color:#484f58;font-size:10px;margin-right:6px}
-.msg .src{color:#58a6ff;font-size:10px;margin-right:4px}
+.msg{padding:4px 8px;border-radius:4px;margin-bottom:3px;font-size:12px;line-height:1.4;background:#1c2128;border-left:2px solid #58a6ff}
+.msg.out{border-left-color:#3fb950;background:#1a2b1a}
+.msg .ts{color:#484f58;font-size:10px;margin-right:4px}
+.msg .src{font-size:10px;margin-right:4px;font-weight:600}
+.msg.in .src{color:#58a6ff}
+.msg.out .src{color:#3fb950}
+.src-badge{font-size:9px;background:#30363d;border-radius:3px;padding:1px 4px;margin-right:4px;color:#8b949e;font-weight:600;letter-spacing:.3px}
+#load-more{display:none;width:100%;background:#21262d;border:1px solid #30363d;border-radius:4px;padding:4px;color:#8b949e;font-size:11px;cursor:pointer;margin-bottom:4px}
+#load-more:hover{color:#c9d1d9}
 #chat-row{display:flex;padding:8px;gap:6px;border-top:1px solid #30363d}
 #chat-in{flex:1;background:#161b22;border:1px solid #30363d;border-radius:6px;padding:6px 10px;color:#c9d1d9;font-size:13px;outline:none}
 #chat-in:focus{border-color:#58a6ff}
@@ -132,7 +145,7 @@ body{background:#0d1117;color:#c9d1d9;font-family:'Segoe UI',system-ui,sans-seri
     <div id="sidebar">
       <div id="chat-section">
         <div class="section-hdr">Chat</div>
-        <div id="chat-log"></div>
+        <div id="chat-log"><button id="load-more" onclick="loadMore()">&#8593; Load earlier</button></div>
         <div id="chat-row">
           <input id="chat-in" placeholder="Message Claude..." />
           <button id="chat-btn" onclick="sendChat()">Send</button>
@@ -146,9 +159,9 @@ body{background:#0d1117;color:#c9d1d9;font-family:'Segoe UI',system-ui,sans-seri
       </div>
       <div id="settings-section">
         <div class="section-hdr" onclick="toggleSection('settings-body','cfg-arrow')">
-          Settings <span id="cfg-arrow">&#9658;</span>
+          Settings <span id="cfg-arrow">&#9660;</span>
         </div>
-        <div id="settings-body">
+        <div id="settings-body" style="display:none">
           <div class="setting-row">
             <label>Model</label>
             <select id="cfg-model">
@@ -186,11 +199,20 @@ es.onmessage=(e)=>{
 es.onerror=()=>{statusText.textContent='stream error';dot.className='dot unknown';};
 
 // Status polling
+let _claudeAlive = true;
 function pollStatus(){
   fetch('/api/status').then(r=>r.json()).then(d=>{
-    const busy=d.status==='busy';
-    dot.className='dot'+(busy?' busy':'');
-    statusText.textContent=d.status;
+    _claudeAlive = d.alive;
+    let cls = 'dot', label = d.status;
+    if (!d.alive) { cls += ' offline'; label = 'offline'; }
+    else if (d.status === 'busy') { cls += ' busy'; label = 'busy'; }
+    // else idle/ready — green dot (default)
+    dot.className = cls;
+    statusText.textContent = label;
+    // Update send button state
+    const btn = document.getElementById('chat-btn');
+    btn.textContent = !d.alive ? 'Offline' : (d.queue_depth > 0 ? 'Queued ('+d.queue_depth+')' : 'Send');
+    btn.style.background = !d.alive ? '#30363d' : '';
     if(d.queue_depth>0){
       queueBadge.style.display='';
       queueBadge.textContent='queue: '+d.queue_depth;
@@ -202,27 +224,79 @@ function pollStatus(){
 setInterval(pollStatus,3000);
 pollStatus();
 
-// Chat
+// Chat history
+let _lastTs = 0;
+let _firstTs = 9999999999;
+let _seenIds = new Set();
+
+const SRC_LABELS = {telegram:'TG', dashboard:'DB', peer:'PEER', cron:'CRON', '':'', out:'OUT'};
+function renderMsg(m, prepend=false) {
+  const id = m.ts + m.dir + m.sender;
+  if (_seenIds.has(id)) return;
+  _seenIds.add(id);
+  const el = document.createElement('div');
+  el.className = 'msg ' + (m.dir === 'out' ? 'out' : 'in');
+  const d = new Date(m.ts * 1000);
+  const ts = d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+  const srcLabel = m.source ? (SRC_LABELS[m.source]||m.source.toUpperCase()) : '';
+  const srcBadge = srcLabel ? '<span class="src-badge">'+srcLabel+'</span>' : '';
+  el.innerHTML = '<span class="ts">'+ts+'</span>'+srcBadge+'<span class="src">'+esc(m.sender)+'</span>'+esc(m.text);
+  const loadMoreBtn = document.getElementById('load-more');
+  if (prepend) {
+    chatLog.insertBefore(el, loadMoreBtn.nextSibling);
+  } else {
+    chatLog.appendChild(el);
+  }
+  if (m.ts > _lastTs) _lastTs = m.ts;
+  if (m.ts < _firstTs) _firstTs = m.ts;
+}
+
+function loadHistory() {
+  fetch('/api/chat-history?limit=50').then(r=>r.json()).then(d=>{
+    const msgs = d.messages || [];
+    msgs.forEach(m => renderMsg(m));
+    chatLog.scrollTop = chatLog.scrollHeight;
+    if (msgs.length >= 50) document.getElementById('load-more').style.display = '';
+  }).catch(()=>{});
+}
+
+function loadMore() {
+  fetch('/api/chat-history?before='+_firstTs+'&limit=50').then(r=>r.json()).then(d=>{
+    const msgs = (d.messages || []).reverse();
+    const scrollBottom = chatLog.scrollHeight - chatLog.scrollTop;
+    msgs.forEach(m => renderMsg(m, true));
+    chatLog.scrollTop = chatLog.scrollHeight - scrollBottom;
+    if ((d.messages||[]).length < 50) document.getElementById('load-more').style.display = 'none';
+  }).catch(()=>{});
+}
+
+function pollNewMessages() {
+  if (_lastTs === 0) return; // wait for initial load
+  fetch('/api/chat-history?since='+_lastTs+'&limit=100').then(r=>r.json()).then(d=>{
+    const msgs = d.messages || [];
+    if (msgs.length > 0) {
+      const atBottom = chatLog.scrollHeight - chatLog.scrollTop <= chatLog.clientHeight + 60;
+      msgs.forEach(m => renderMsg(m));
+      if (atBottom) chatLog.scrollTop = chatLog.scrollHeight;
+    }
+  }).catch(()=>{});
+}
+
+loadHistory();
+setInterval(pollNewMessages, 2000);
+
+// Chat send
 function sendChat(){
   const inp=document.getElementById('chat-in');
   const msg=inp.value.trim();
   if(!msg)return;
   inp.value='';
-  addMsg(msg,'Ben');
   fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:msg,sender:'Ben (Dashboard)'})})
     .catch(e=>console.error(e));
 }
 document.getElementById('chat-in').addEventListener('keydown',(e)=>{
   if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendChat();}
 });
-function addMsg(text,src){
-  const el=document.createElement('div');
-  el.className='msg';
-  const ts=new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
-  el.innerHTML='<span class="ts">'+ts+'</span><span class="src">'+esc(src)+'</span>'+esc(text);
-  chatLog.appendChild(el);
-  chatLog.scrollTop=chatLog.scrollHeight;
-}
 function esc(t){return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 
 // Services
@@ -271,9 +345,9 @@ loadSettings();
 function toggleSection(bodyId,arrowId){
   const body=document.getElementById(bodyId);
   const arrow=document.getElementById(arrowId);
-  const collapsed=body.style.display==='none';
-  body.style.display=collapsed?'':'none';
-  arrow.innerHTML=collapsed?'&#9660;':'&#9658;';
+  const nowVisible=body.style.display!=='none';
+  body.style.display=nowVisible?'none':'';
+  arrow.innerHTML=nowVisible?'&#9658;':'&#9660;';
 }
 </script>
 </body>
@@ -441,14 +515,12 @@ def stop_typing():
 
 # ── Injection queue ───────────────────────────────────────────────────────────
 
-def inject_to_claude(message_text: str, sender_name: str) -> bool:
-    """Inject a single message into the tmux Claude session."""
-    ts = datetime.now().strftime("%Y-%m-%d %H:%M")
-    display = f"[TELEGRAM from {sender_name} | {ts}]: {message_text}"
-    log.info(f"Injecting: {display[:80]}")
+def inject_to_claude(display_text: str) -> bool:
+    """Inject pre-formatted text into the tmux Claude session (raw, no prefix added)."""
+    log.info(f"Injecting: {display_text[:80]}")
     try:
         subprocess.run(
-            ["tmux", "send-keys", "-t", f"{TMUX_SESSION}:{TMUX_WINDOW}", display],
+            ["tmux", "send-keys", "-t", f"{TMUX_SESSION}:{TMUX_WINDOW}", display_text],
             check=True
         )
         time.sleep(0.3)
@@ -462,36 +534,64 @@ def inject_to_claude(message_text: str, sender_name: str) -> bool:
         return False
 
 
-def enqueue_injection(text: str, sender: str, source: str = "unknown"):
-    """Queue a message for serialized injection. Thread-safe."""
-    _inject_queue.put({"text": text, "sender": sender, "source": source})
+def log_chat_history(direction: str, sender: str, text: str, source: str = ""):
+    """Append a message to the shared chat history file."""
+    try:
+        entry = json.dumps({"ts": time.time(), "dir": direction, "sender": sender,
+                            "text": text, "source": source})
+        with open(CHAT_HISTORY, "a") as f:
+            f.write(entry + "\n")
+    except Exception as e:
+        log.debug(f"chat history write failed: {e}")
+
+
+def enqueue_injection(text: str, sender: str, source: str = "telegram"):
+    """Queue a message for serialized injection. Thread-safe.
+
+    Adds the appropriate trigger-rule prefix based on source:
+    - telegram / dashboard → [TELEGRAM from {sender} | {ts}]: {text}
+    - peer                 → text already pre-formatted as [PEER from ...]
+    - cron / other         → text already pre-formatted by caller
+    """
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M")
+    if source in ("telegram", "dashboard"):
+        display = f"[TELEGRAM from {sender} | {ts}]: {text}"
+    else:
+        # peer, cron, and restart context are pre-formatted by their callers
+        display = text
+    _inject_queue.put({"display": display, "sender": sender, "source": source})
+    log_chat_history("in", sender, text, source=source)
     log.debug(f"Queued [{source}] from {sender}: {text[:60]}")
 
 
-def _wait_for_idle(max_wait: int = 90):
-    """Wait until Claude's status file shows idle (or until max_wait seconds)."""
+def _wait_for_alive(max_wait: int = 300):
+    """Wait until the Claude tmux session exists. Only blocks if Claude is offline."""
     elapsed = 0
     while elapsed < max_wait:
-        try:
-            status = STATUS_FILE.read_text().strip()
-            if status != "busy":
-                return
-        except Exception:
-            return
-        time.sleep(2)
-        elapsed += 2
+        r = subprocess.run(
+            ["tmux", "has-session", "-t", f"{TMUX_SESSION}:{TMUX_WINDOW}"],
+            capture_output=True
+        )
+        if r.returncode == 0:
+            return True
+        log.info(f"Claude offline — waiting to inject ({elapsed}s elapsed)...")
+        time.sleep(3)
+        elapsed += 3
+    log.warning("Claude never came online — dropping message")
+    return False
 
 
 def start_injector_thread():
-    """Single background thread that drains the injection queue serially."""
+    """Single background thread that drains the injection queue serially.
+    Injects immediately when Claude is alive. Only waits if the session is dead."""
     def _loop():
         while True:
             try:
                 item = _inject_queue.get(timeout=5)
-                _wait_for_idle()
-                inject_to_claude(item["text"], item["sender"])
-                # Small gap between consecutive messages to avoid tmux input collisions
-                time.sleep(0.4)
+                if _wait_for_alive():
+                    inject_to_claude(item["display"])
+                    # Brief gap to avoid tmux key collision on back-to-back messages
+                    time.sleep(0.4)
             except _queue_module.Empty:
                 continue
             except Exception as e:
@@ -523,6 +623,8 @@ class ClawdyHandler(BaseHTTPRequestHandler):
             self._serve_activity()
         elif self.path == "/api/status":
             self._serve_status()
+        elif self.path.startswith("/api/chat-history"):
+            self._serve_chat_history()
         else:
             self.send_response(404)
             self.end_headers()
@@ -545,6 +647,8 @@ class ClawdyHandler(BaseHTTPRequestHandler):
             self._update_settings(data)
         elif re.match(r"^/api/restart/[a-zA-Z0-9\-\.@]+$", self.path):
             self._handle_restart()
+        elif self.path == "/api/claude-start":
+            self._handle_claude_start()
         else:
             self.send_response(404)
             self.end_headers()
@@ -591,6 +695,10 @@ class ClawdyHandler(BaseHTTPRequestHandler):
 
     def _handle_restart(self):
         svc = self.path.split("/api/restart/", 1)[-1]
+        # Special case: claude-code = kill tmux session + relaunch
+        if svc in ("claude-code", "claude-code.service"):
+            self._handle_claude_start()
+            return
         try:
             subprocess.run(
                 ["sudo", "systemctl", "restart", svc],
@@ -601,6 +709,48 @@ class ClawdyHandler(BaseHTTPRequestHandler):
             self._json({"ok": False, "error": e.stderr.decode()[:200]}, 500)
         except Exception as e:
             self._json({"ok": False, "error": str(e)}, 500)
+
+    def _handle_claude_start(self):
+        """Kill the Claude tmux session and relaunch via claude-start.sh."""
+        try:
+            subprocess.run(["tmux", "kill-session", "-t", TMUX_SESSION], capture_output=True)
+            time.sleep(1)
+            start_sh = Path.home() / "claude-start.sh"
+            subprocess.Popen([str(start_sh)], start_new_session=True)
+            self._json({"ok": True, "restarted": "claude-code"})
+        except Exception as e:
+            self._json({"ok": False, "error": str(e)}, 500)
+
+    def _serve_chat_history(self):
+        from urllib.parse import urlparse, parse_qs
+        qs = parse_qs(urlparse(self.path).query)
+        since = float(qs.get("since", ["0"])[0])
+        before = float(qs.get("before", ["9999999999"])[0])
+        limit = int(qs.get("limit", ["50"])[0])
+
+        messages = []
+        try:
+            if CHAT_HISTORY.exists():
+                for line in CHAT_HISTORY.read_text().splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        m = json.loads(line)
+                        if m.get("ts", 0) > since and m.get("ts", 0) < before:
+                            messages.append(m)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        # Most recent N if fetching initial load (since=0), chronological
+        if since == 0:
+            messages = messages[-limit:]
+        else:
+            messages = messages[:limit]
+
+        self._json({"messages": messages, "has_more": False})
 
     def _serve_html(self):
         body = DASHBOARD_HTML.encode()
@@ -620,10 +770,12 @@ class ClawdyHandler(BaseHTTPRequestHandler):
         try:
             while True:
                 r = subprocess.run(
-                    ["tmux", "capture-pane", "-pt", f"{TMUX_SESSION}:{TMUX_WINDOW}", "-e"],
+                    ["tmux", "capture-pane", "-pt", f"{TMUX_SESSION}:{TMUX_WINDOW}"],
                     capture_output=True, text=True, timeout=5
                 )
-                content = r.stdout
+                # Strip ANSI escape codes and trailing whitespace per line
+                raw = re.sub(r'\x1b\[[0-9;]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b[^[Oc]', '', r.stdout)
+                content = "\n".join(line.rstrip() for line in raw.splitlines()).strip()
                 if content != last:
                     payload = json.dumps({"content": content})
                     self.wfile.write(f"data: {payload}\n\n".encode())
@@ -711,11 +863,27 @@ class ClawdyHandler(BaseHTTPRequestHandler):
         self._json({"activity": recent})
 
     def _serve_status(self):
+        # Check if tmux session + Claude process are alive
         try:
-            status = STATUS_FILE.read_text().strip()
+            r = subprocess.run(
+                ["tmux", "has-session", "-t", f"{TMUX_SESSION}:{TMUX_WINDOW}"],
+                capture_output=True, timeout=3
+            )
+            alive = r.returncode == 0
         except Exception:
-            status = "unknown"
-        self._json({"status": status, "queue_depth": _inject_queue.qsize()})
+            alive = False
+
+        # Read status file (busy / idle)
+        try:
+            status = STATUS_FILE.read_text().strip() if alive else "offline"
+        except Exception:
+            status = "idle" if alive else "offline"
+
+        self._json({
+            "alive": alive,
+            "status": status,
+            "queue_depth": _inject_queue.qsize(),
+        })
 
     def _json(self, data, code=200):
         body = json.dumps(data).encode()
@@ -811,7 +979,9 @@ def main():
 
     # Start combined bridge + dashboard HTTP server
     bridge_key = env.get("BRIDGE_API_KEY", "")
-    dashboard_port = int(env.get("DASHBOARD_PORT", "8766"))
+    # Use BRIDGE_PORT for the combined server so peer bots can still reach /inject
+    # DASHBOARD_PORT is kept as a fallback alias for the same port
+    dashboard_port = int(env.get("BRIDGE_PORT", env.get("DASHBOARD_PORT", "8765")))
     try:
         import subprocess as _sp
         ts_ip = _sp.check_output(["tailscale", "ip", "-4"], text=True).strip()

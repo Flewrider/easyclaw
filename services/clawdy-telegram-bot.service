@@ -1,5 +1,5 @@
 [Unit]
-Description=EasyClaw Telegram Bot Bridge
+Description=Clawdy Bridge — Telegram polling, peer bridge, management dashboard
 After=network-online.target claude-code.service
 Wants=network-online.target
 
