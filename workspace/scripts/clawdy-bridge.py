@@ -707,16 +707,27 @@ def enqueue_injection(text: str, sender: str, source: str = "telegram"):
 
 
 def _wait_for_alive(max_wait: int = 300):
-    """Wait until the Claude tmux session exists. Only blocks if Claude is offline."""
+    """Wait until Claude Code is actually running inside the tmux pane.
+    tmux has-session returns true before Claude starts — we check the pane process."""
     elapsed = 0
     while elapsed < max_wait:
+        # Check 1: session exists
         r = subprocess.run(
             ["tmux", "has-session", "-t", f"{TMUX_SESSION}:{TMUX_WINDOW}"],
             capture_output=True
         )
         if r.returncode == 0:
-            return True
-        log.info(f"Claude offline — waiting to inject ({elapsed}s elapsed)...")
+            # Check 2: Claude Code (node) is running in the pane, not just bash/sleep
+            r2 = subprocess.run(
+                ["tmux", "list-panes", "-t", f"{TMUX_SESSION}:{TMUX_WINDOW}",
+                 "-F", "#{pane_current_command}"],
+                capture_output=True, text=True
+            )
+            cmd = r2.stdout.strip()
+            if cmd and cmd not in ("bash", "sh", "zsh", "sleep", ""):
+                return True
+        pane_cmd = r2.stdout.strip() if r.returncode == 0 else "no session"
+        log.info(f"Claude not ready (pane: {pane_cmd!r}) — waiting ({elapsed}s)...")
         time.sleep(3)
         elapsed += 3
     log.warning("Claude never came online — dropping message")
@@ -1213,26 +1224,23 @@ def start_crash_monitor():
                 is_alive = False
 
             if was_alive and not is_alive:
-                # Claude just went offline
-                if _restart_pending is not None:
-                    # Planned restart — queue the resume context
-                    resume = _restart_pending
-                    _restart_pending = None
-                    log.info(f"Planned restart detected — queuing resume context: {resume[:60]}")
-                    enqueue_injection("continue", "system", source="restart")
-                    log_chat_history("in", "system",
-                                     f"[RESTART] Planned restart. Resume context: {resume}",
-                                     source="restart")
-                else:
-                    # Unplanned crash
-                    log.warning("Claude crash detected — queuing crash recovery message")
-                    crash_msg = (
-                        "RESTART CONTEXT: you crashed. find out why and fix the issue then continue where you left off"
-                    )
-                    enqueue_injection(crash_msg, "system", source="restart")
-                    log_chat_history("in", "system",
-                                     "[RESTART] YOU CRASHED — find the cause, fix it, continue your work",
-                                     source="restart")
+                # Claude just went offline — clear any stale restart_pending set by this session
+                _restart_pending = None
+
+            if not was_alive and is_alive:
+                # Claude just came back online — check for queued restart context file
+                resume_file = Path.home() / ".easyclaw" / "restart-resume"
+                if resume_file.exists():
+                    try:
+                        resume = resume_file.read_text().strip()
+                        resume_file.unlink(missing_ok=True)
+                        if resume:
+                            log.info(f"Injecting restart context: {resume[:60]}")
+                            # Small delay to let Claude Code fully init before injecting
+                            _time.sleep(5)
+                            enqueue_injection(resume, "system", source="restart")
+                    except Exception as e:
+                        log.warning(f"Failed to read restart-resume: {e}")
 
             was_alive = is_alive
             _time.sleep(5)
