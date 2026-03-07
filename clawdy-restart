@@ -33,5 +33,17 @@ $PENDING_TASKS
 RESUME_EOF
 
 echo "[$TIMESTAMP] system: Restarting — $REASON" >> "$LOG_FILE"
-echo "Restarting claude-code service (reason: $REASON)..."
-sudo systemctl restart claude-code.service
+echo "Restarting Claude Code (reason: $REASON)..."
+
+# Try dashboard API first (preferred — managed restart via clawdy-bridge)
+BRIDGE_PORT=$(grep "^BRIDGE_PORT=" "$HOME/.easyclaw/.env" 2>/dev/null | cut -d= -f2)
+BRIDGE_PORT="${BRIDGE_PORT:-8765}"
+if curl -sf --max-time 3 -X POST "http://127.0.0.1:$BRIDGE_PORT/api/claude-start" > /dev/null 2>&1; then
+  echo "  Restarted via dashboard API (port $BRIDGE_PORT)"
+else
+  # Fallback: direct tmux kill + relaunch
+  echo "  Dashboard API unreachable — falling back to direct restart"
+  tmux kill-session -t claude 2>/dev/null || true
+  sleep 1
+  bash "$HOME/claude-start.sh" &
+fi
