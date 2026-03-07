@@ -102,33 +102,34 @@ body{background:#0f0f0f;color:#e8e8e8;font-family:-apple-system,'Segoe UI',syste
 
 /* Message bubbles */
 .bubble-wrap{display:flex;flex-direction:column;max-width:82%;gap:2px}
-.bubble-wrap.out{align-self:flex-end;align-items:flex-end}
-.bubble-wrap.in{align-self:flex-start;align-items:flex-start}
+.bubble-wrap.user{align-self:flex-end;align-items:flex-end}
+.bubble-wrap.left{align-self:flex-start;align-items:flex-start}
 .bubble-meta{display:flex;align-items:center;gap:5px;padding:0 4px}
-.bubble-sender{font-size:11px;font-weight:600}
+.bubble-sender{font-size:11px;font-weight:600;color:#888}
 .bubble-src{font-size:10px;border-radius:4px;padding:1px 5px;font-weight:700;letter-spacing:.3px}
 .bubble{padding:8px 12px;border-radius:18px;font-size:14px;line-height:1.45;word-break:break-word;white-space:pre-wrap;position:relative}
 .bubble-time{font-size:10px;color:#555;padding:0 4px}
-/* Incoming */
-.bubble-wrap.in .bubble{background:#1e1e1e;border-bottom-left-radius:5px;color:#e8e8e8}
-/* Outgoing */
-.bubble-wrap.out .bubble{background:#0a5ea8;border-bottom-right-radius:5px;color:#fff}
-/* Source colors */
-.src-telegram .bubble-sender{color:#2AABEE}
-.src-telegram .bubble-src{background:#1a3a50;color:#2AABEE}
-.src-telegram .bubble{border-left:2px solid #2AABEE}
-.src-peer .bubble-sender{color:#af52de}
-.src-peer .bubble-src{background:#2d1a40;color:#af52de}
-.src-peer .bubble{border-left:2px solid #af52de}
-.src-cron .bubble-sender{color:#ff9500}
-.src-cron .bubble-src{background:#3a2400;color:#ff9500}
-.src-cron .bubble{border-left:2px solid #ff9500}
-.src-dashboard .bubble-sender{color:#4cd964}
-.src-dashboard .bubble-src{background:#0a2a0a;color:#4cd964}
-.src-dashboard .bubble{border-left:2px solid #4cd964}
-.src-restart .bubble-sender{color:#ff6b35}
-.src-restart .bubble-src{background:#3a1500;color:#ff6b35}
-.src-restart .bubble{border-left:2px solid #ff6b35}
+/* User messages (Ben) — right side, blue */
+.bubble-wrap.user .bubble{background:#007aff;border-bottom-right-radius:5px;color:#fff}
+.bubble-wrap.user .bubble-time{text-align:right}
+/* Clawdy responses — left side, dark green */
+.bubble-wrap.clawdy .bubble{background:#1a3a1a;border-bottom-left-radius:5px;color:#e8e8e8;border-left:2px solid #4cd964}
+.bubble-wrap.clawdy .bubble-sender{color:#4cd964}
+/* Peer — left, purple */
+.bubble-wrap.src-peer .bubble{background:#1e1228;border-bottom-left-radius:5px;color:#e8e8e8;border-left:2px solid #af52de}
+.bubble-wrap.src-peer .bubble-sender{color:#af52de}
+.bubble-wrap.src-peer .bubble-src{background:#2d1a40;color:#af52de}
+/* Cron — left, orange */
+.bubble-wrap.src-cron .bubble{background:#1e1400;border-bottom-left-radius:5px;color:#e8e8e8;border-left:2px solid #ff9500}
+.bubble-wrap.src-cron .bubble-sender{color:#ff9500}
+.bubble-wrap.src-cron .bubble-src{background:#3a2400;color:#ff9500}
+/* System/restart — left, red-orange */
+.bubble-wrap.src-restart .bubble{background:#1e0e00;border-bottom-left-radius:5px;color:#e8e8e8;border-left:2px solid #ff6b35}
+.bubble-wrap.src-restart .bubble-sender{color:#ff6b35}
+.bubble-wrap.src-restart .bubble-src{background:#3a1500;color:#ff6b35}
+/* Source badge for user messages */
+.bubble-wrap.user .bubble-src{background:rgba(255,255,255,.2);color:rgba(255,255,255,.85)}
+.bubble-wrap.user .bubble-sender{color:rgba(255,255,255,.7)}
 
 /* Chat input */
 #chat-input-row{display:flex;padding:10px 12px;gap:8px;border-top:1px solid #2a2a2a;background:#1a1a1a;align-items:flex-end}
@@ -208,9 +209,17 @@ body{background:#0f0f0f;color:#e8e8e8;font-family:-apple-system,'Segoe UI',syste
       <div class="setting-row">
         <label>Model</label>
         <select id="cfg-model">
-          <option value="haiku">Haiku (fast)</option>
-          <option value="sonnet">Sonnet</option>
-          <option value="opus">Opus</option>
+          <option value="claude-haiku-4-5-20251001">Haiku 4.5 (fast)</option>
+          <option value="claude-sonnet-4-6">Sonnet 4.6</option>
+          <option value="claude-opus-4-6">Opus 4.6</option>
+        </select>
+      </div>
+      <div class="setting-row">
+        <label>Effort</label>
+        <select id="cfg-effort">
+          <option value="low">Low (faster)</option>
+          <option value="medium">Medium</option>
+          <option value="high">High (best)</option>
         </select>
       </div>
       <div class="setting-row">
@@ -218,6 +227,7 @@ body{background:#0f0f0f;color:#e8e8e8;font-family:-apple-system,'Segoe UI',syste
         <input id="cfg-name" />
       </div>
       <button id="save-settings" onclick="saveSettings()">Save &amp; apply</button>
+      <p style="margin-top:10px;font-size:11px;color:#555">Model + Effort changes take effect after Clawdy restart.</p>
     </div>
   </div>
 </div>
@@ -281,13 +291,13 @@ let _lastTs = 0;
 let _firstTs = 9999999999;
 let _seenIds = new Set();
 
-const SRC_INFO = {
-  telegram: {label:'TG', cls:'src-telegram'},
-  dashboard: {label:'DASH', cls:'src-dashboard'},
-  peer:      {label:'PEER', cls:'src-peer'},
-  cron:      {label:'CRON', cls:'src-cron'},
-  restart:   {label:'SYS', cls:'src-restart'},
-  out:       {label:'OUT', cls:''},
+// source → {badge label, extra css classes on bubble-wrap}
+const SRC_BADGES = {
+  telegram:  'TG',
+  dashboard: 'DASH',
+  peer:      'PEER',
+  cron:      'CRON',
+  restart:   'SYS',
 };
 
 function esc(t) { return String(t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
@@ -297,21 +307,27 @@ function renderMsg(m, prepend=false) {
   if (_seenIds.has(id)) return;
   _seenIds.add(id);
 
-  const isOut = m.dir === 'out';
   const src = m.source || '';
-  const info = SRC_INFO[src] || {label: src.toUpperCase(), cls: ''};
+  const isUser = m.dir === 'in' && (src === 'telegram' || src === 'dashboard');
+  const isClawdy = m.dir === 'out';
   const d = new Date(m.ts * 1000);
   const ts = d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
 
-  const wrap = document.createElement('div');
-  wrap.className = 'bubble-wrap ' + (isOut ? 'out' : 'in') + (info.cls ? ' ' + info.cls : '');
+  // CSS classes for positioning + source color
+  let wrapCls = 'bubble-wrap ';
+  if (isUser)       wrapCls += 'user';
+  else if (isClawdy) wrapCls += 'left clawdy';
+  else               wrapCls += 'left src-' + (src || 'system');
 
-  const metaHtml = isOut
-    ? '<div class="bubble-meta"><span class="bubble-sender">'+esc(m.sender)+'</span></div>'
-    : '<div class="bubble-meta">'
-      + (info.label ? '<span class="bubble-src">'+info.label+'</span>' : '')
-      + '<span class="bubble-sender">'+esc(m.sender)+'</span>'
-      + '</div>';
+  const wrap = document.createElement('div');
+  wrap.className = wrapCls;
+
+  const badge = SRC_BADGES[src] ? '<span class="bubble-src">'+SRC_BADGES[src]+'</span>' : '';
+  const sender = '<span class="bubble-sender">'+esc(m.sender)+'</span>';
+
+  const metaHtml = isUser
+    ? '<div class="bubble-meta">'+badge+sender+'</div>'
+    : '<div class="bubble-meta">'+badge+sender+'</div>';
 
   wrap.innerHTML = metaHtml
     + '<div class="bubble">'+esc(m.text||'')+'</div>'
@@ -403,18 +419,20 @@ function restartSvc(name) {
 function loadSettings() {
   fetch('/api/settings').then(r=>r.json()).then(d=>{
     const s = d.settings || {};
-    document.getElementById('cfg-model').value = s.CLAUDE_DEFAULT_MODEL || 'haiku';
+    if (s.claude_model) document.getElementById('cfg-model').value = s.claude_model;
+    if (s.claude_effort) document.getElementById('cfg-effort').value = s.claude_effort;
     document.getElementById('cfg-name').value = s.BOT_NAME || 'Clawdy';
   }).catch(()=>{});
 }
 function saveSettings() {
   const data = {
-    CLAUDE_DEFAULT_MODEL: document.getElementById('cfg-model').value,
-    BOT_NAME: document.getElementById('cfg-name').value,
+    claude_model:  document.getElementById('cfg-model').value,
+    claude_effort: document.getElementById('cfg-effort').value,
+    BOT_NAME:      document.getElementById('cfg-name').value,
   };
   fetch('/api/settings', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)})
     .then(r=>r.json()).then(d=>{
-      if (d.ok) alert('Settings saved. Restart Clawdy for model change to take effect.');
+      if (d.ok) alert('Saved! Restart Clawdy for model/effort to take effect.');
       else alert('Error: ' + d.error);
     });
 }
@@ -892,7 +910,7 @@ class ClawdyHandler(BaseHTTPRequestHandler):
         self._json({"services": statuses})
 
     def _serve_settings(self):
-        # Expose non-secret settings only
+        # Expose non-secret env settings
         hidden = {"TELEGRAM_BOT_TOKEN", "BRIDGE_API_KEY"}
         settings = {}
         try:
@@ -905,11 +923,37 @@ class ClawdyHandler(BaseHTTPRequestHandler):
                         settings[k] = v.strip()
         except Exception:
             pass
+        # Also read actual Claude model + effort from settings.json
+        try:
+            claude_settings_file = Path.home() / ".claude" / "settings.json"
+            cs = json.loads(claude_settings_file.read_text())
+            settings["claude_model"] = cs.get("model", "claude-sonnet-4-6")
+            settings["claude_effort"] = cs.get("effortLevel", "medium")
+        except Exception:
+            pass
         self._json({"settings": settings})
 
     def _update_settings(self, data):
-        safe_keys = {"CLAUDE_DEFAULT_MODEL", "BOT_NAME", "BOT_PURPOSE", "LOG_LEVEL"}
         updated = []
+        # Write model + effort to ~/.claude/settings.json
+        claude_keys = {"claude_model", "claude_effort"}
+        claude_data = {k: v for k, v in data.items() if k in claude_keys}
+        if claude_data:
+            try:
+                claude_settings_file = Path.home() / ".claude" / "settings.json"
+                cs = json.loads(claude_settings_file.read_text()) if claude_settings_file.exists() else {}
+                if "claude_model" in claude_data:
+                    cs["model"] = claude_data["claude_model"]
+                    updated.append("claude_model")
+                if "claude_effort" in claude_data:
+                    cs["effortLevel"] = claude_data["claude_effort"]
+                    updated.append("claude_effort")
+                claude_settings_file.write_text(json.dumps(cs, indent=2))
+            except Exception as e:
+                self._json({"ok": False, "error": str(e)}, 500)
+                return
+        # Write remaining safe keys to .env
+        safe_keys = {"BOT_NAME", "BOT_PURPOSE", "LOG_LEVEL"}
         try:
             env_text = ENV_FILE.read_text()
             for k, v in data.items():
