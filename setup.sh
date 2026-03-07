@@ -630,7 +630,7 @@ install_scripts() {
     local ws="$SCRIPT_DIR/workspace/scripts"
 
     # Copy all workspace scripts to ~/.easyclaw/scripts/
-    for script in clawdy-cron-check.sh clawdy-daily-briefing.sh telegram-bot.py; do
+    for script in clawdy-cron-check.sh clawdy-daily-briefing.sh clawdy-bridge.py clawdy-mcp.py; do
         if [ -f "$ws/$script" ]; then
             cp "$ws/$script" "${USER_HOME}/.easyclaw/scripts/"
             chmod +x "${USER_HOME}/.easyclaw/scripts/$script" 2>/dev/null || true

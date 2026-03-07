@@ -5,7 +5,7 @@ Clawdy Telegram Bot Bridge + Management Dashboard
 - Injects them into the tmux Claude session via a serialized queue
   (prevents race conditions when Telegram + peer messages arrive simultaneously)
 - Serves a management dashboard via HTTP (Tailscale-only, DASHBOARD_PORT)
-- Run as a systemd service: clawdy-telegram-bot.service
+- Run as a systemd service: clawdy-bridge.service
 """
 
 import os
@@ -25,7 +25,7 @@ from datetime import datetime
 EASYCLAW = Path.home() / ".easyclaw"
 ENV_FILE = EASYCLAW / ".env"
 CONFIG_FILE = EASYCLAW / "telegram-config.json"
-LOG_FILE = EASYCLAW / "telegram-bot.log"
+LOG_FILE = EASYCLAW / "clawdy-bridge.log"
 STOP_TYPING = EASYCLAW / "stop-typing"
 STATUS_FILE = EASYCLAW / "status"
 ACTIVITY_LOG = EASYCLAW / "activity-log.md"
@@ -69,66 +69,100 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <title>Clawdy</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-body{background:#0d1117;color:#c9d1d9;font-family:'Segoe UI',system-ui,sans-serif;height:100vh;overflow:hidden}
-#app{display:flex;flex-direction:column;height:100vh}
-#header{background:#161b22;border-bottom:1px solid #30363d;padding:8px 16px;display:flex;align-items:center;gap:12px;flex-shrink:0}
-#header h1{font-size:15px;font-weight:600;color:#58a6ff;letter-spacing:.3px}
-.dot{width:8px;height:8px;border-radius:50%;background:#3fb950;flex-shrink:0;transition:background .4s}
-.dot.busy{background:#e3b341}
-.dot.offline{background:#f78166}
-.dot.unknown{background:#8b949e}
-#status-text{font-size:12px;color:#8b949e}
-#queue-badge{background:#30363d;border-radius:10px;padding:2px 8px;font-size:11px;color:#e3b341;display:none}
-#ts-label{margin-left:auto;font-size:11px;color:#484f58}
-#main{display:flex;flex:1;min-height:0}
-#terminal-pane{flex:1;display:flex;flex-direction:column;min-width:0}
-#terminal{flex:1;overflow-y:auto;overflow-x:hidden;background:#0d1117;padding:12px 14px;font-family:'Courier New',Courier,monospace;font-size:12px;line-height:1.45;white-space:pre-wrap;overflow-wrap:break-word;word-break:break-word;color:#c9d1d9}
-#terminal::-webkit-scrollbar{width:6px}
-#terminal::-webkit-scrollbar-thumb{background:#30363d;border-radius:3px}
-#sidebar{width:360px;flex-shrink:0;display:flex;flex-direction:column;border-left:1px solid #30363d;background:#0d1117}
-@media(max-width:700px){
-  #main{flex-direction:column}
-  #terminal-pane{height:45vh;flex:none}
-  #sidebar{width:100%;border-left:none;border-top:1px solid #30363d;flex:1}
-}
-.section-hdr{padding:7px 12px;background:#161b22;border-bottom:1px solid #30363d;font-size:11px;font-weight:600;color:#8b949e;text-transform:uppercase;letter-spacing:.6px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;user-select:none}
-#chat-section{flex:1;display:flex;flex-direction:column;min-height:0}
-#chat-log{flex:1;overflow-y:auto;padding:6px 8px}
+body{background:#0f0f0f;color:#e8e8e8;font-family:-apple-system,'Segoe UI',system-ui,sans-serif;height:100dvh;overflow:hidden}
+#app{display:flex;flex-direction:column;height:100dvh}
+
+/* Header */
+#header{background:#1a1a1a;border-bottom:1px solid #2a2a2a;padding:10px 16px;display:flex;align-items:center;gap:10px;flex-shrink:0}
+#header h1{font-size:16px;font-weight:700;color:#fff;letter-spacing:.2px}
+.dot{width:8px;height:8px;border-radius:50%;background:#4cd964;flex-shrink:0;transition:background .4s;box-shadow:0 0 6px #4cd96480}
+.dot.busy{background:#ff9500;box-shadow:0 0 6px #ff950080}
+.dot.offline{background:#ff3b30;box-shadow:0 0 6px #ff3b3080}
+.dot.unknown{background:#636366;box-shadow:none}
+#status-text{font-size:12px;color:#888}
+#queue-badge{background:#2a2a2a;border-radius:10px;padding:2px 8px;font-size:11px;color:#ff9500;display:none;margin-left:4px}
+
+/* Tabs */
+#tabs{display:flex;background:#1a1a1a;border-bottom:1px solid #2a2a2a;flex-shrink:0;overflow-x:auto}
+.tab{padding:9px 18px;font-size:13px;font-weight:500;color:#888;cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap;transition:color .2s}
+.tab:hover{color:#ccc}
+.tab.active{color:#fff;border-bottom-color:#007aff}
+#ts-label{margin-left:auto;font-size:11px;color:#444;padding-right:4px;white-space:nowrap}
+
+/* Tab panels */
+.panel{display:none;flex:1;flex-direction:column;min-height:0;overflow:hidden}
+.panel.active{display:flex}
+
+/* ── CHAT TAB ── */
+#chat-log{flex:1;overflow-y:auto;padding:12px 12px 4px;display:flex;flex-direction:column;gap:6px}
 #chat-log::-webkit-scrollbar{width:4px}
-#chat-log::-webkit-scrollbar-thumb{background:#30363d}
-.msg{padding:4px 8px;border-radius:4px;margin-bottom:3px;font-size:12px;line-height:1.4;background:#1c2128;border-left:2px solid #58a6ff}
-.msg.out{border-left-color:#3fb950;background:#1a2b1a}
-.msg .ts{color:#484f58;font-size:10px;margin-right:4px}
-.msg .src{font-size:10px;margin-right:4px;font-weight:600}
-.msg.in .src{color:#58a6ff}
-.msg.out .src{color:#3fb950}
-.src-badge{font-size:9px;background:#30363d;border-radius:3px;padding:1px 4px;margin-right:4px;color:#8b949e;font-weight:600;letter-spacing:.3px}
-#load-more{display:none;width:100%;background:#21262d;border:1px solid #30363d;border-radius:4px;padding:4px;color:#8b949e;font-size:11px;cursor:pointer;margin-bottom:4px}
-#load-more:hover{color:#c9d1d9}
-#chat-row{display:flex;padding:8px;gap:6px;border-top:1px solid #30363d}
-#chat-in{flex:1;background:#161b22;border:1px solid #30363d;border-radius:6px;padding:6px 10px;color:#c9d1d9;font-size:13px;outline:none}
-#chat-in:focus{border-color:#58a6ff}
-#chat-btn{background:#238636;border:none;border-radius:6px;padding:6px 14px;color:#fff;font-size:13px;cursor:pointer;white-space:nowrap}
-#chat-btn:hover{background:#2ea043}
-#services-section{flex-shrink:0;border-top:1px solid #30363d}
-#svc-list{padding:4px 8px 6px;max-height:180px;overflow-y:auto}
-.svc{display:flex;align-items:center;padding:4px 4px;gap:8px;border-radius:4px}
-.svc:hover{background:#161b22}
-.sdot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
-.sdot.on{background:#3fb950}
-.sdot.off{background:#f78166}
-.sname{flex:1;font-size:11px;font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#c9d1d9}
-.sname.off{color:#8b949e}
-.rbtn{background:#21262d;border:1px solid #30363d;border-radius:4px;padding:2px 8px;font-size:10px;color:#8b949e;cursor:pointer}
-.rbtn:hover{border-color:#58a6ff;color:#58a6ff}
-#settings-section{flex-shrink:0;border-top:1px solid #30363d}
-#settings-body{padding:8px;display:none}
-.setting-row{display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:12px}
-.setting-row label{width:110px;color:#8b949e;flex-shrink:0}
-.setting-row input,.setting-row select{flex:1;background:#161b22;border:1px solid #30363d;border-radius:4px;padding:4px 8px;color:#c9d1d9;font-size:12px;outline:none}
-.setting-row input:focus,.setting-row select:focus{border-color:#58a6ff}
-#save-settings{background:#21262d;border:1px solid #30363d;border-radius:4px;padding:3px 12px;color:#c9d1d9;font-size:12px;cursor:pointer;margin-top:4px}
-#save-settings:hover{border-color:#58a6ff;color:#58a6ff}
+#chat-log::-webkit-scrollbar-thumb{background:#333;border-radius:2px}
+#load-more{align-self:center;background:transparent;border:1px solid #333;border-radius:12px;padding:4px 14px;color:#666;font-size:11px;cursor:pointer;margin-bottom:2px;display:none}
+#load-more:hover{color:#aaa;border-color:#555}
+
+/* Message bubbles */
+.bubble-wrap{display:flex;flex-direction:column;max-width:82%;gap:2px}
+.bubble-wrap.out{align-self:flex-end;align-items:flex-end}
+.bubble-wrap.in{align-self:flex-start;align-items:flex-start}
+.bubble-meta{display:flex;align-items:center;gap:5px;padding:0 4px}
+.bubble-sender{font-size:11px;font-weight:600}
+.bubble-src{font-size:10px;border-radius:4px;padding:1px 5px;font-weight:700;letter-spacing:.3px}
+.bubble{padding:8px 12px;border-radius:18px;font-size:14px;line-height:1.45;word-break:break-word;white-space:pre-wrap;position:relative}
+.bubble-time{font-size:10px;color:#555;padding:0 4px}
+/* Incoming */
+.bubble-wrap.in .bubble{background:#1e1e1e;border-bottom-left-radius:5px;color:#e8e8e8}
+/* Outgoing */
+.bubble-wrap.out .bubble{background:#0a5ea8;border-bottom-right-radius:5px;color:#fff}
+/* Source colors */
+.src-telegram .bubble-sender{color:#2AABEE}
+.src-telegram .bubble-src{background:#1a3a50;color:#2AABEE}
+.src-telegram .bubble{border-left:2px solid #2AABEE}
+.src-peer .bubble-sender{color:#af52de}
+.src-peer .bubble-src{background:#2d1a40;color:#af52de}
+.src-peer .bubble{border-left:2px solid #af52de}
+.src-cron .bubble-sender{color:#ff9500}
+.src-cron .bubble-src{background:#3a2400;color:#ff9500}
+.src-cron .bubble{border-left:2px solid #ff9500}
+.src-dashboard .bubble-sender{color:#4cd964}
+.src-dashboard .bubble-src{background:#0a2a0a;color:#4cd964}
+.src-dashboard .bubble{border-left:2px solid #4cd964}
+.src-restart .bubble-sender{color:#ff6b35}
+.src-restart .bubble-src{background:#3a1500;color:#ff6b35}
+.src-restart .bubble{border-left:2px solid #ff6b35}
+
+/* Chat input */
+#chat-input-row{display:flex;padding:10px 12px;gap:8px;border-top:1px solid #2a2a2a;background:#1a1a1a;align-items:flex-end}
+#chat-in{flex:1;background:#2a2a2a;border:1px solid #3a3a3a;border-radius:20px;padding:8px 14px;color:#e8e8e8;font-size:14px;outline:none;resize:none;max-height:120px;font-family:inherit;line-height:1.4}
+#chat-in:focus{border-color:#007aff}
+#chat-btn{background:#007aff;border:none;border-radius:50%;width:36px;height:36px;color:#fff;font-size:18px;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:background .2s}
+#chat-btn:hover{background:#0066d6}
+#chat-btn.offline{background:#333;cursor:default}
+
+/* ── TERMINAL TAB ── */
+#terminal{flex:1;overflow-y:auto;overflow-x:hidden;background:#0f0f0f;padding:12px 14px;font-family:'Courier New',Courier,monospace;font-size:12px;line-height:1.5;white-space:pre-wrap;overflow-wrap:break-word;word-break:break-word;color:#c9d1d9}
+#terminal::-webkit-scrollbar{width:6px}
+#terminal::-webkit-scrollbar-thumb{background:#2a2a2a;border-radius:3px}
+
+/* ── SERVICES TAB ── */
+#svc-list{flex:1;overflow-y:auto;padding:8px}
+.svc{display:flex;align-items:center;padding:10px 8px;gap:10px;border-radius:10px;border-bottom:1px solid #1e1e1e}
+.svc:last-child{border-bottom:none}
+.sdot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.sdot.on{background:#4cd964;box-shadow:0 0 5px #4cd96440}
+.sdot.off{background:#ff3b30}
+.sname{flex:1;font-size:13px;font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sname.off{color:#555}
+.rbtn{background:#2a2a2a;border:1px solid #3a3a3a;border-radius:8px;padding:4px 12px;font-size:11px;color:#888;cursor:pointer}
+.rbtn:hover{border-color:#007aff;color:#007aff}
+
+/* ── SETTINGS TAB ── */
+#settings-panel{flex:1;overflow-y:auto;padding:16px}
+.setting-row{display:flex;align-items:center;gap:10px;margin-bottom:12px;font-size:13px}
+.setting-row label{width:120px;color:#888;flex-shrink:0}
+.setting-row input,.setting-row select{flex:1;background:#2a2a2a;border:1px solid #3a3a3a;border-radius:8px;padding:7px 10px;color:#e8e8e8;font-size:13px;outline:none}
+.setting-row input:focus,.setting-row select:focus{border-color:#007aff}
+#save-settings{background:#007aff;border:none;border-radius:8px;padding:8px 20px;color:#fff;font-size:13px;cursor:pointer;margin-top:4px}
+#save-settings:hover{background:#0066d6}
 </style>
 </head>
 <body>
@@ -138,90 +172,108 @@ body{background:#0d1117;color:#c9d1d9;font-family:'Segoe UI',system-ui,sans-seri
     <div class="dot unknown" id="dot"></div>
     <span id="status-text">connecting</span>
     <span id="queue-badge"></span>
+  </div>
+  <div id="tabs">
+    <div class="tab active" onclick="switchTab('chat')">Chat</div>
+    <div class="tab" onclick="switchTab('terminal')">Terminal</div>
+    <div class="tab" onclick="switchTab('services')">Services</div>
+    <div class="tab" onclick="switchTab('settings')">Settings</div>
     <span id="ts-label"></span>
   </div>
-  <div id="main">
-    <div id="terminal-pane"><pre id="terminal"></pre></div>
-    <div id="sidebar">
-      <div id="chat-section">
-        <div class="section-hdr">Chat</div>
-        <div id="chat-log"><button id="load-more" onclick="loadMore()">&#8593; Load earlier</button></div>
-        <div id="chat-row">
-          <input id="chat-in" placeholder="Message Claude..." />
-          <button id="chat-btn" onclick="sendChat()">Send</button>
-        </div>
+
+  <!-- Chat panel -->
+  <div id="panel-chat" class="panel active">
+    <div id="chat-log">
+      <button id="load-more" onclick="loadMore()">&#8593; Load earlier</button>
+    </div>
+    <div id="chat-input-row">
+      <textarea id="chat-in" rows="1" placeholder="Message Claude..."></textarea>
+      <button id="chat-btn" onclick="sendChat()">&#9650;</button>
+    </div>
+  </div>
+
+  <!-- Terminal panel -->
+  <div id="panel-terminal" class="panel">
+    <pre id="terminal"></pre>
+  </div>
+
+  <!-- Services panel -->
+  <div id="panel-services" class="panel">
+    <div id="svc-list"></div>
+  </div>
+
+  <!-- Settings panel -->
+  <div id="panel-settings" class="panel">
+    <div id="settings-panel">
+      <div class="setting-row">
+        <label>Model</label>
+        <select id="cfg-model">
+          <option value="haiku">Haiku (fast)</option>
+          <option value="sonnet">Sonnet</option>
+          <option value="opus">Opus</option>
+        </select>
       </div>
-      <div id="services-section">
-        <div class="section-hdr" onclick="toggleSection('svc-list','svc-arrow')">
-          Services <span id="svc-arrow">&#9660;</span>
-        </div>
-        <div id="svc-list"></div>
+      <div class="setting-row">
+        <label>Bot Name</label>
+        <input id="cfg-name" />
       </div>
-      <div id="settings-section">
-        <div class="section-hdr" onclick="toggleSection('settings-body','cfg-arrow')">
-          Settings <span id="cfg-arrow">&#9660;</span>
-        </div>
-        <div id="settings-body" style="display:none">
-          <div class="setting-row">
-            <label>Model</label>
-            <select id="cfg-model">
-              <option value="haiku">Haiku (fast)</option>
-              <option value="sonnet">Sonnet</option>
-              <option value="opus">Opus</option>
-            </select>
-          </div>
-          <div class="setting-row">
-            <label>Bot Name</label>
-            <input id="cfg-name" />
-          </div>
-          <button id="save-settings" onclick="saveSettings()">Save &amp; apply</button>
-        </div>
-      </div>
+      <button id="save-settings" onclick="saveSettings()">Save &amp; apply</button>
     </div>
   </div>
 </div>
+
 <script>
-const term=document.getElementById('terminal');
-const chatLog=document.getElementById('chat-log');
-const dot=document.getElementById('dot');
-const statusText=document.getElementById('status-text');
-const queueBadge=document.getElementById('queue-badge');
+const term = document.getElementById('terminal');
+const chatLog = document.getElementById('chat-log');
+const dot = document.getElementById('dot');
+const statusText = document.getElementById('status-text');
+const queueBadge = document.getElementById('queue-badge');
+let _activeTab = 'chat';
+
+// Tab switching
+const TABS = ['chat','terminal','services','settings'];
+function switchTab(name) {
+  _activeTab = name;
+  document.querySelectorAll('.tab').forEach((t,i) => t.classList.toggle('active', TABS[i]===name));
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  document.getElementById('panel-'+name).classList.add('active');
+  if (name === 'chat') setTimeout(()=>{ chatLog.scrollTop = chatLog.scrollHeight; }, 50);
+  if (name === 'services') loadServices();
+  if (name === 'settings') loadSettings();
+}
 
 // SSE tmux stream
-const es=new EventSource('/stream');
-es.onmessage=(e)=>{
-  const d=JSON.parse(e.data);
-  const atBottom=term.scrollHeight-term.scrollTop<=term.clientHeight+60;
-  term.textContent=d.content;
-  if(atBottom) term.scrollTop=term.scrollHeight;
-  document.getElementById('ts-label').textContent=new Date().toLocaleTimeString();
+const es = new EventSource('/stream');
+es.onmessage = (e) => {
+  const d = JSON.parse(e.data);
+  const atBottom = term.scrollHeight - term.scrollTop <= term.clientHeight + 60;
+  term.textContent = d.content;
+  if (atBottom) term.scrollTop = term.scrollHeight;
+  document.getElementById('ts-label').textContent = new Date().toLocaleTimeString();
 };
-es.onerror=()=>{statusText.textContent='stream error';dot.className='dot unknown';};
+es.onerror = () => { statusText.textContent = 'stream error'; dot.className = 'dot unknown'; };
 
 // Status polling
 let _claudeAlive = true;
-function pollStatus(){
+function pollStatus() {
   fetch('/api/status').then(r=>r.json()).then(d=>{
     _claudeAlive = d.alive;
     let cls = 'dot', label = d.status;
     if (!d.alive) { cls += ' offline'; label = 'offline'; }
     else if (d.status === 'busy') { cls += ' busy'; label = 'busy'; }
-    // else idle/ready — green dot (default)
     dot.className = cls;
     statusText.textContent = label;
-    // Update send button state
     const btn = document.getElementById('chat-btn');
-    btn.textContent = !d.alive ? 'Offline' : (d.queue_depth > 0 ? 'Queued ('+d.queue_depth+')' : 'Send');
-    btn.style.background = !d.alive ? '#30363d' : '';
-    if(d.queue_depth>0){
-      queueBadge.style.display='';
-      queueBadge.textContent='queue: '+d.queue_depth;
+    btn.classList.toggle('offline', !d.alive);
+    if (d.queue_depth > 0) {
+      queueBadge.style.display = '';
+      queueBadge.textContent = 'queue: ' + d.queue_depth;
     } else {
-      queueBadge.style.display='none';
+      queueBadge.style.display = 'none';
     }
   }).catch(()=>{});
 }
-setInterval(pollStatus,3000);
+setInterval(pollStatus, 3000);
 pollStatus();
 
 // Chat history
@@ -229,23 +281,47 @@ let _lastTs = 0;
 let _firstTs = 9999999999;
 let _seenIds = new Set();
 
-const SRC_LABELS = {telegram:'TG', dashboard:'DB', peer:'PEER', cron:'CRON', '':'', out:'OUT'};
+const SRC_INFO = {
+  telegram: {label:'TG', cls:'src-telegram'},
+  dashboard: {label:'DASH', cls:'src-dashboard'},
+  peer:      {label:'PEER', cls:'src-peer'},
+  cron:      {label:'CRON', cls:'src-cron'},
+  restart:   {label:'SYS', cls:'src-restart'},
+  out:       {label:'OUT', cls:''},
+};
+
+function esc(t) { return String(t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
 function renderMsg(m, prepend=false) {
-  const id = m.ts + m.dir + m.sender;
+  const id = m.ts + '|' + m.dir + '|' + m.sender + '|' + (m.text||'').slice(0,20);
   if (_seenIds.has(id)) return;
   _seenIds.add(id);
-  const el = document.createElement('div');
-  el.className = 'msg ' + (m.dir === 'out' ? 'out' : 'in');
+
+  const isOut = m.dir === 'out';
+  const src = m.source || '';
+  const info = SRC_INFO[src] || {label: src.toUpperCase(), cls: ''};
   const d = new Date(m.ts * 1000);
   const ts = d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
-  const srcLabel = m.source ? (SRC_LABELS[m.source]||m.source.toUpperCase()) : '';
-  const srcBadge = srcLabel ? '<span class="src-badge">'+srcLabel+'</span>' : '';
-  el.innerHTML = '<span class="ts">'+ts+'</span>'+srcBadge+'<span class="src">'+esc(m.sender)+'</span>'+esc(m.text);
+
+  const wrap = document.createElement('div');
+  wrap.className = 'bubble-wrap ' + (isOut ? 'out' : 'in') + (info.cls ? ' ' + info.cls : '');
+
+  const metaHtml = isOut
+    ? '<div class="bubble-meta"><span class="bubble-sender">'+esc(m.sender)+'</span></div>'
+    : '<div class="bubble-meta">'
+      + (info.label ? '<span class="bubble-src">'+info.label+'</span>' : '')
+      + '<span class="bubble-sender">'+esc(m.sender)+'</span>'
+      + '</div>';
+
+  wrap.innerHTML = metaHtml
+    + '<div class="bubble">'+esc(m.text||'')+'</div>'
+    + '<div class="bubble-time">'+ts+'</div>';
+
   const loadMoreBtn = document.getElementById('load-more');
   if (prepend) {
-    chatLog.insertBefore(el, loadMoreBtn.nextSibling);
+    chatLog.insertBefore(wrap, loadMoreBtn.nextSibling);
   } else {
-    chatLog.appendChild(el);
+    chatLog.appendChild(wrap);
   }
   if (m.ts > _lastTs) _lastTs = m.ts;
   if (m.ts < _firstTs) _firstTs = m.ts;
@@ -271,11 +347,11 @@ function loadMore() {
 }
 
 function pollNewMessages() {
-  if (_lastTs === 0) return; // wait for initial load
+  if (_lastTs === 0) return;
   fetch('/api/chat-history?since='+_lastTs+'&limit=100').then(r=>r.json()).then(d=>{
     const msgs = d.messages || [];
     if (msgs.length > 0) {
-      const atBottom = chatLog.scrollHeight - chatLog.scrollTop <= chatLog.clientHeight + 60;
+      const atBottom = chatLog.scrollHeight - chatLog.scrollTop <= chatLog.clientHeight + 80;
       msgs.forEach(m => renderMsg(m));
       if (atBottom) chatLog.scrollTop = chatLog.scrollHeight;
     }
@@ -286,23 +362,28 @@ loadHistory();
 setInterval(pollNewMessages, 2000);
 
 // Chat send
-function sendChat(){
-  const inp=document.getElementById('chat-in');
-  const msg=inp.value.trim();
-  if(!msg)return;
-  inp.value='';
-  fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:msg,sender:'Ben (Dashboard)'})})
+function sendChat() {
+  const inp = document.getElementById('chat-in');
+  const msg = inp.value.trim();
+  if (!msg) return;
+  inp.value = '';
+  inp.style.height = '';
+  fetch('/chat', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({message:msg, sender:'Ben (Dashboard)'})})
     .catch(e=>console.error(e));
 }
-document.getElementById('chat-in').addEventListener('keydown',(e)=>{
-  if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendChat();}
+const chatIn = document.getElementById('chat-in');
+chatIn.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); }
 });
-function esc(t){return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+chatIn.addEventListener('input', () => {
+  chatIn.style.height = '';
+  chatIn.style.height = Math.min(chatIn.scrollHeight, 120) + 'px';
+});
 
 // Services
-function loadServices(){
+function loadServices() {
   fetch('/api/services').then(r=>r.json()).then(d=>{
-    document.getElementById('svc-list').innerHTML=d.services.map(s=>`
+    document.getElementById('svc-list').innerHTML = d.services.map(s => `
       <div class="svc">
         <div class="sdot ${s.active?'on':'off'}"></div>
         <span class="sname ${s.active?'':'off'}" title="${s.name}">${s.name.replace('.service','')}</span>
@@ -310,45 +391,34 @@ function loadServices(){
       </div>`).join('');
   }).catch(()=>{});
 }
-function restartSvc(name){
-  if(!confirm('Restart '+name+'?'))return;
-  fetch('/api/restart/'+name,{method:'POST'}).then(r=>r.json()).then(d=>{
-    if(d.ok)setTimeout(loadServices,2000);
-    else alert('Restart failed: '+d.error);
+function restartSvc(name) {
+  if (!confirm('Restart ' + name + '?')) return;
+  fetch('/api/restart/' + name, {method:'POST'}).then(r=>r.json()).then(d=>{
+    if (d.ok) setTimeout(loadServices, 2000);
+    else alert('Restart failed: ' + d.error);
   });
 }
-loadServices();
-setInterval(loadServices,15000);
 
 // Settings
-function loadSettings(){
+function loadSettings() {
   fetch('/api/settings').then(r=>r.json()).then(d=>{
-    const s=d.settings||{};
-    document.getElementById('cfg-model').value=s.CLAUDE_DEFAULT_MODEL||'haiku';
-    document.getElementById('cfg-name').value=s.BOT_NAME||'Clawdy';
+    const s = d.settings || {};
+    document.getElementById('cfg-model').value = s.CLAUDE_DEFAULT_MODEL || 'haiku';
+    document.getElementById('cfg-name').value = s.BOT_NAME || 'Clawdy';
   }).catch(()=>{});
 }
-function saveSettings(){
-  const data={
-    CLAUDE_DEFAULT_MODEL:document.getElementById('cfg-model').value,
-    BOT_NAME:document.getElementById('cfg-name').value,
+function saveSettings() {
+  const data = {
+    CLAUDE_DEFAULT_MODEL: document.getElementById('cfg-model').value,
+    BOT_NAME: document.getElementById('cfg-name').value,
   };
-  fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)})
+  fetch('/api/settings', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)})
     .then(r=>r.json()).then(d=>{
-      if(d.ok) alert('Settings saved. Restart Clawdy for model change to take effect.');
-      else alert('Error: '+d.error);
+      if (d.ok) alert('Settings saved. Restart Clawdy for model change to take effect.');
+      else alert('Error: ' + d.error);
     });
 }
 loadSettings();
-
-// Collapse/expand sections
-function toggleSection(bodyId,arrowId){
-  const body=document.getElementById(bodyId);
-  const arrow=document.getElementById(arrowId);
-  const nowVisible=body.style.display!=='none';
-  body.style.display=nowVisible?'none':'';
-  arrow.innerHTML=nowVisible?'&#9658;':'&#9660;';
-}
 </script>
 </body>
 </html>"""
@@ -675,9 +745,11 @@ class ClawdyHandler(BaseHTTPRequestHandler):
             return
 
         log.info(f"Bridge inject from {sender}: {message[:80]}")
-        # Use [PEER from ...] prefix so Claude's PEER trigger rule fires
+        # Pre-format with [PEER from ...] so Claude's PEER trigger rule fires.
+        # Pass original message for chat history (not the display string).
         display = f"[PEER from {sender} | {ts}]: {message}"
-        enqueue_injection(display, sender, source="peer")
+        _inject_queue.put({"display": display, "sender": sender, "source": "peer"})
+        log_chat_history("in", sender, message, source="peer")
         self.send_response(200)
         self.end_headers()
         self.wfile.write(b"queued")
@@ -789,7 +861,7 @@ class ClawdyHandler(BaseHTTPRequestHandler):
 
     def _serve_services(self):
         # Core services always shown
-        services = ["claude-code.service", "clawdy-telegram-bot.service"]
+        services = ["claude-code.service", "clawdy-bridge.service"]
         # Auto-discover project services
         try:
             r = subprocess.run(

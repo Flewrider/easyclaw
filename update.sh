@@ -134,16 +134,14 @@ if [ "$RELOAD_SERVICES" = "1" ]; then
 fi
 echo
 
-# ── 8. Restart telegram-bot ───────────────────────────────────────────────
-echo "➜ Restarting telegram-bot..."
-# Kill any stray telegram-bot.py processes not managed by systemd
-# (can happen after manual starts or workspace-path transitions)
-pkill -f "telegram-bot.py" 2>/dev/null && echo "  Killed stray telegram-bot.py processes" || true
+# ── 8. Restart clawdy-bridge ──────────────────────────────────────────────
+echo "➜ Restarting clawdy-bridge..."
+pkill -f "clawdy-bridge.py" 2>/dev/null && echo "  Killed stray clawdy-bridge.py processes" || true
 sleep 1
-if sudo systemctl restart clawdy-telegram-bot.service 2>/dev/null; then
-    echo "  Restarted: clawdy-telegram-bot.service"
+if sudo systemctl restart clawdy-bridge.service 2>/dev/null; then
+    echo "  Restarted: clawdy-bridge.service"
 else
-    echo "  (telegram-bot not active — skipping)"
+    echo "  (clawdy-bridge not active — skipping)"
 fi
 echo
 
