@@ -1,21 +1,24 @@
 #!/usr/bin/env python3
 """
-Clawdy Telegram Bot Bridge
+Clawdy Telegram Bot Bridge + Management Dashboard
 - Polls Telegram for new messages from authorized chats
-- Injects them into the tmux Claude session
-- First message from any chat triggers an approval flow
+- Injects them into the tmux Claude session via a serialized queue
+  (prevents race conditions when Telegram + peer messages arrive simultaneously)
+- Serves a management dashboard via HTTP (Tailscale-only, DASHBOARD_PORT)
 - Run as a systemd service: clawdy-telegram-bot.service
 """
 
 import os
+import re
 import sys
 import json
 import time
+import queue as _queue_module
 import subprocess
 import threading
 import requests
 import logging
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from datetime import datetime
 
@@ -24,56 +27,26 @@ ENV_FILE = EASYCLAW / ".env"
 CONFIG_FILE = EASYCLAW / "telegram-config.json"
 LOG_FILE = EASYCLAW / "telegram-bot.log"
 STOP_TYPING = EASYCLAW / "stop-typing"
+STATUS_FILE = EASYCLAW / "status"
+ACTIVITY_LOG = EASYCLAW / "activity-log.md"
 FILES_DIR = Path.home() / "telegram-files"  # overridden in main() from env
+
 # Whisper model (loaded once on first voice message, then cached)
 _whisper_model = None
 
+# Injection queue — all tmux send-keys calls go through this
+_inject_queue = _queue_module.Queue()
 
-def get_whisper_model():
-    """Load the faster-whisper 'base' model on first call, then cache it."""
-    global _whisper_model
-    if _whisper_model is None:
-        try:
-            from faster_whisper import WhisperModel
-            log.info("Loading Whisper 'base' model for voice transcription...")
-            _whisper_model = WhisperModel("base", device="cpu", compute_type="int8")
-            log.info("Whisper model loaded.")
-        except Exception as e:
-            log.error(f"Failed to load Whisper model: {e}")
-    return _whisper_model
-
-
-def transcribe_voice(file_path: Path) -> str | None:
-    """Transcribe a voice/audio file using local faster-whisper. Returns text or None."""
-    model = get_whisper_model()
-    if model is None:
-        return None
-    try:
-        # First pass: auto-detect language with VAD filter
-        segments, info = model.transcribe(str(file_path), beam_size=5, vad_filter=True)
-        text = " ".join(seg.text.strip() for seg in segments).strip()
-        log.info(f"Transcribed voice ({info.language}, prob={info.language_probability:.2f}, {info.duration:.1f}s): {text[:80]!r}")
-        # If empty and low confidence, retry with explicit German
-        if not text and info.language_probability < 0.7:
-            log.info("Low confidence / empty — retrying with language=de")
-            segments, info = model.transcribe(str(file_path), beam_size=5, vad_filter=True, language="de")
-            text = " ".join(seg.text.strip() for seg in segments).strip()
-            log.info(f"Retry (de): {text[:80]!r}")
-        return text if text else None
-    except Exception as e:
-        log.error(f"Transcription failed: {e}")
-        return None
-
-# Rate limiting: max 5 messages per 30 seconds per chat_id
-_rate_limit: dict[int, list[float]] = {}
-
-# Typing indicator state (in-process thread)
+# Typing indicator state
 _typing_thread: threading.Thread | None = None
 _stop_typing_event = threading.Event()
 _bot_token: str = ""
 TMUX_SESSION = "claude"
 TMUX_WINDOW = "claude"
-FILE_SIZE_LIMIT = 20 * 1024 * 1024  # 20 MB — Telegram bot download hard limit
+FILE_SIZE_LIMIT = 20 * 1024 * 1024  # 20 MB
+
+# Rate limiting: max 5 messages per 30 seconds per chat_id
+_rate_limit: dict[int, list[float]] = {}
 
 logging.basicConfig(
     level=logging.INFO,
@@ -85,12 +58,266 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
+# ── Dashboard HTML ────────────────────────────────────────────────────────────
+
+DASHBOARD_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Clawdy</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0d1117;color:#c9d1d9;font-family:'Segoe UI',system-ui,sans-serif;height:100vh;overflow:hidden}
+#app{display:flex;flex-direction:column;height:100vh}
+#header{background:#161b22;border-bottom:1px solid #30363d;padding:8px 16px;display:flex;align-items:center;gap:12px;flex-shrink:0}
+#header h1{font-size:15px;font-weight:600;color:#58a6ff;letter-spacing:.3px}
+.dot{width:8px;height:8px;border-radius:50%;background:#3fb950;flex-shrink:0}
+.dot.busy{background:#f78166}
+.dot.unknown{background:#8b949e}
+#status-text{font-size:12px;color:#8b949e}
+#queue-badge{background:#30363d;border-radius:10px;padding:2px 8px;font-size:11px;color:#e3b341;display:none}
+#ts-label{margin-left:auto;font-size:11px;color:#484f58}
+#main{display:flex;flex:1;min-height:0}
+#terminal-pane{flex:1;display:flex;flex-direction:column;min-width:0}
+#terminal{flex:1;overflow-y:auto;background:#0d1117;padding:12px 14px;font-family:'Courier New',Courier,monospace;font-size:12px;line-height:1.45;white-space:pre-wrap;word-break:break-all;color:#c9d1d9}
+#terminal::-webkit-scrollbar{width:6px}
+#terminal::-webkit-scrollbar-thumb{background:#30363d;border-radius:3px}
+#sidebar{width:360px;flex-shrink:0;display:flex;flex-direction:column;border-left:1px solid #30363d;background:#0d1117}
+.section-hdr{padding:7px 12px;background:#161b22;border-bottom:1px solid #30363d;font-size:11px;font-weight:600;color:#8b949e;text-transform:uppercase;letter-spacing:.6px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;user-select:none}
+#chat-section{flex:1;display:flex;flex-direction:column;min-height:0}
+#chat-log{flex:1;overflow-y:auto;padding:6px 8px}
+#chat-log::-webkit-scrollbar{width:4px}
+#chat-log::-webkit-scrollbar-thumb{background:#30363d}
+.msg{padding:4px 8px;border-radius:4px;margin-bottom:3px;font-size:12px;line-height:1.4;border-left:2px solid #58a6ff;background:#1c2128}
+.msg .ts{color:#484f58;font-size:10px;margin-right:6px}
+.msg .src{color:#58a6ff;font-size:10px;margin-right:4px}
+#chat-row{display:flex;padding:8px;gap:6px;border-top:1px solid #30363d}
+#chat-in{flex:1;background:#161b22;border:1px solid #30363d;border-radius:6px;padding:6px 10px;color:#c9d1d9;font-size:13px;outline:none}
+#chat-in:focus{border-color:#58a6ff}
+#chat-btn{background:#238636;border:none;border-radius:6px;padding:6px 14px;color:#fff;font-size:13px;cursor:pointer;white-space:nowrap}
+#chat-btn:hover{background:#2ea043}
+#services-section{flex-shrink:0;border-top:1px solid #30363d}
+#svc-list{padding:4px 8px 6px;max-height:180px;overflow-y:auto}
+.svc{display:flex;align-items:center;padding:4px 4px;gap:8px;border-radius:4px}
+.svc:hover{background:#161b22}
+.sdot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+.sdot.on{background:#3fb950}
+.sdot.off{background:#f78166}
+.sname{flex:1;font-size:11px;font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#c9d1d9}
+.sname.off{color:#8b949e}
+.rbtn{background:#21262d;border:1px solid #30363d;border-radius:4px;padding:2px 8px;font-size:10px;color:#8b949e;cursor:pointer}
+.rbtn:hover{border-color:#58a6ff;color:#58a6ff}
+#settings-section{flex-shrink:0;border-top:1px solid #30363d}
+#settings-body{padding:8px;display:none}
+.setting-row{display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:12px}
+.setting-row label{width:110px;color:#8b949e;flex-shrink:0}
+.setting-row input,.setting-row select{flex:1;background:#161b22;border:1px solid #30363d;border-radius:4px;padding:4px 8px;color:#c9d1d9;font-size:12px;outline:none}
+.setting-row input:focus,.setting-row select:focus{border-color:#58a6ff}
+#save-settings{background:#21262d;border:1px solid #30363d;border-radius:4px;padding:3px 12px;color:#c9d1d9;font-size:12px;cursor:pointer;margin-top:4px}
+#save-settings:hover{border-color:#58a6ff;color:#58a6ff}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="header">
+    <h1>Clawdy</h1>
+    <div class="dot unknown" id="dot"></div>
+    <span id="status-text">connecting</span>
+    <span id="queue-badge"></span>
+    <span id="ts-label"></span>
+  </div>
+  <div id="main">
+    <div id="terminal-pane"><pre id="terminal"></pre></div>
+    <div id="sidebar">
+      <div id="chat-section">
+        <div class="section-hdr">Chat</div>
+        <div id="chat-log"></div>
+        <div id="chat-row">
+          <input id="chat-in" placeholder="Message Claude..." />
+          <button id="chat-btn" onclick="sendChat()">Send</button>
+        </div>
+      </div>
+      <div id="services-section">
+        <div class="section-hdr" onclick="toggleSection('svc-list','svc-arrow')">
+          Services <span id="svc-arrow">&#9660;</span>
+        </div>
+        <div id="svc-list"></div>
+      </div>
+      <div id="settings-section">
+        <div class="section-hdr" onclick="toggleSection('settings-body','cfg-arrow')">
+          Settings <span id="cfg-arrow">&#9658;</span>
+        </div>
+        <div id="settings-body">
+          <div class="setting-row">
+            <label>Model</label>
+            <select id="cfg-model">
+              <option value="haiku">Haiku (fast)</option>
+              <option value="sonnet">Sonnet</option>
+              <option value="opus">Opus</option>
+            </select>
+          </div>
+          <div class="setting-row">
+            <label>Bot Name</label>
+            <input id="cfg-name" />
+          </div>
+          <button id="save-settings" onclick="saveSettings()">Save &amp; apply</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+const term=document.getElementById('terminal');
+const chatLog=document.getElementById('chat-log');
+const dot=document.getElementById('dot');
+const statusText=document.getElementById('status-text');
+const queueBadge=document.getElementById('queue-badge');
+
+// SSE tmux stream
+const es=new EventSource('/stream');
+es.onmessage=(e)=>{
+  const d=JSON.parse(e.data);
+  const atBottom=term.scrollHeight-term.scrollTop<=term.clientHeight+60;
+  term.textContent=d.content;
+  if(atBottom) term.scrollTop=term.scrollHeight;
+  document.getElementById('ts-label').textContent=new Date().toLocaleTimeString();
+};
+es.onerror=()=>{statusText.textContent='stream error';dot.className='dot unknown';};
+
+// Status polling
+function pollStatus(){
+  fetch('/api/status').then(r=>r.json()).then(d=>{
+    const busy=d.status==='busy';
+    dot.className='dot'+(busy?' busy':'');
+    statusText.textContent=d.status;
+    if(d.queue_depth>0){
+      queueBadge.style.display='';
+      queueBadge.textContent='queue: '+d.queue_depth;
+    } else {
+      queueBadge.style.display='none';
+    }
+  }).catch(()=>{});
+}
+setInterval(pollStatus,3000);
+pollStatus();
+
+// Chat
+function sendChat(){
+  const inp=document.getElementById('chat-in');
+  const msg=inp.value.trim();
+  if(!msg)return;
+  inp.value='';
+  addMsg(msg,'Ben');
+  fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:msg,sender:'Ben (Dashboard)'})})
+    .catch(e=>console.error(e));
+}
+document.getElementById('chat-in').addEventListener('keydown',(e)=>{
+  if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendChat();}
+});
+function addMsg(text,src){
+  const el=document.createElement('div');
+  el.className='msg';
+  const ts=new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+  el.innerHTML='<span class="ts">'+ts+'</span><span class="src">'+esc(src)+'</span>'+esc(text);
+  chatLog.appendChild(el);
+  chatLog.scrollTop=chatLog.scrollHeight;
+}
+function esc(t){return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+
+// Services
+function loadServices(){
+  fetch('/api/services').then(r=>r.json()).then(d=>{
+    document.getElementById('svc-list').innerHTML=d.services.map(s=>`
+      <div class="svc">
+        <div class="sdot ${s.active?'on':'off'}"></div>
+        <span class="sname ${s.active?'':'off'}" title="${s.name}">${s.name.replace('.service','')}</span>
+        <button class="rbtn" onclick="restartSvc('${s.name}')">restart</button>
+      </div>`).join('');
+  }).catch(()=>{});
+}
+function restartSvc(name){
+  if(!confirm('Restart '+name+'?'))return;
+  fetch('/api/restart/'+name,{method:'POST'}).then(r=>r.json()).then(d=>{
+    if(d.ok)setTimeout(loadServices,2000);
+    else alert('Restart failed: '+d.error);
+  });
+}
+loadServices();
+setInterval(loadServices,15000);
+
+// Settings
+function loadSettings(){
+  fetch('/api/settings').then(r=>r.json()).then(d=>{
+    const s=d.settings||{};
+    document.getElementById('cfg-model').value=s.CLAUDE_DEFAULT_MODEL||'haiku';
+    document.getElementById('cfg-name').value=s.BOT_NAME||'Clawdy';
+  }).catch(()=>{});
+}
+function saveSettings(){
+  const data={
+    CLAUDE_DEFAULT_MODEL:document.getElementById('cfg-model').value,
+    BOT_NAME:document.getElementById('cfg-name').value,
+  };
+  fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)})
+    .then(r=>r.json()).then(d=>{
+      if(d.ok) alert('Settings saved. Restart Clawdy for model change to take effect.');
+      else alert('Error: '+d.error);
+    });
+}
+loadSettings();
+
+// Collapse/expand sections
+function toggleSection(bodyId,arrowId){
+  const body=document.getElementById(bodyId);
+  const arrow=document.getElementById(arrowId);
+  const collapsed=body.style.display==='none';
+  body.style.display=collapsed?'':'none';
+  arrow.innerHTML=collapsed?'&#9660;':'&#9658;';
+}
+</script>
+</body>
+</html>"""
+
+
+# ── Whisper ───────────────────────────────────────────────────────────────────
+
+def get_whisper_model():
+    global _whisper_model
+    if _whisper_model is None:
+        try:
+            from faster_whisper import WhisperModel
+            log.info("Loading Whisper 'base' model...")
+            _whisper_model = WhisperModel("base", device="cpu", compute_type="int8")
+            log.info("Whisper model loaded.")
+        except Exception as e:
+            log.error(f"Failed to load Whisper model: {e}")
+    return _whisper_model
+
+
+def transcribe_voice(file_path: Path) -> str | None:
+    model = get_whisper_model()
+    if model is None:
+        return None
+    try:
+        segments, info = model.transcribe(str(file_path), beam_size=5, vad_filter=True)
+        text = " ".join(seg.text.strip() for seg in segments).strip()
+        log.info(f"Transcribed ({info.language}, {info.duration:.1f}s): {text[:80]!r}")
+        if not text and info.language_probability < 0.7:
+            segments, info = model.transcribe(str(file_path), beam_size=5, vad_filter=True, language="de")
+            text = " ".join(seg.text.strip() for seg in segments).strip()
+        return text if text else None
+    except Exception as e:
+        log.error(f"Transcription failed: {e}")
+        return None
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
 def load_env():
     env = {}
     if not ENV_FILE.exists():
-        log.error(f"No .env file found at {ENV_FILE}")
-        log.error(f"Copy .env.template to .env and set your TELEGRAM_BOT_TOKEN")
+        log.error(f"No .env at {ENV_FILE}")
         sys.exit(1)
     for line in ENV_FILE.read_text().splitlines():
         line = line.strip()
@@ -119,8 +346,8 @@ def tg_request(token, method, _retries=3, **kwargs):
             return r.json()
         except Exception as e:
             if attempt < _retries - 1:
-                delay = 2 ** attempt  # 1s, 2s, 4s
-                log.warning(f"Telegram API error ({method}), retrying in {delay}s: {e}")
+                delay = 2 ** attempt
+                log.warning(f"Telegram API error ({method}), retry in {delay}s: {e}")
                 time.sleep(delay)
             else:
                 log.error(f"Telegram API error ({method}) after {_retries} attempts: {e}")
@@ -132,13 +359,10 @@ def send_message(token, chat_id, text, **kwargs):
 
 
 def get_file_info(msg):
-    """Extract (file_id, filename_hint, file_size) from a message with an attachment.
-    Returns (None, None, None) if no supported file type found."""
     if "document" in msg:
         d = msg["document"]
         return d["file_id"], d.get("file_name", "document"), d.get("file_size", 0)
     if "photo" in msg:
-        # Pick the largest photo size
         largest = max(msg["photo"], key=lambda p: p.get("file_size", 0))
         return largest["file_id"], "photo.jpg", largest.get("file_size", 0)
     if "audio" in msg:
@@ -160,48 +384,42 @@ def get_file_info(msg):
 
 
 def download_file(token, file_id, filename_hint):
-    """Download a Telegram file to FILES_DIR. Returns local path or None on failure."""
     FILES_DIR.mkdir(parents=True, exist_ok=True)
-    # Get file path from Telegram
     result = tg_request(token, "getFile", file_id=file_id)
     if not result.get("ok"):
         log.error(f"getFile failed: {result}")
         return None
     file_path = result["result"]["file_path"]
     url = f"https://api.telegram.org/file/bot{token}/{file_path}"
-    # Use timestamp prefix to avoid collisions
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    local_name = f"{timestamp}_{filename_hint}"
-    local_path = FILES_DIR / local_name
+    local_path = FILES_DIR / f"{timestamp}_{filename_hint}"
     try:
         r = requests.get(url, timeout=60, stream=True)
         r.raise_for_status()
         with open(local_path, "wb") as f:
             for chunk in r.iter_content(chunk_size=8192):
                 f.write(chunk)
-        log.info(f"Downloaded file to {local_path}")
+        log.info(f"Downloaded to {local_path}")
         return local_path
     except Exception as e:
         log.error(f"File download failed: {e}")
         return None
 
 
+# ── Typing indicator ──────────────────────────────────────────────────────────
+
 def start_typing(chat_id, timeout=90):
-    """Start background typing indicator thread. Auto-stops after timeout seconds
-    even if no telegram_send is ever called (e.g. agent decides not to respond)."""
     global _typing_thread
-    stop_typing()  # stop any existing thread first
+    stop_typing()
     _stop_typing_event.clear()
-    STOP_TYPING.unlink(missing_ok=True)  # clear any stale flag from prior session
+    STOP_TYPING.unlink(missing_ok=True)
 
     def _loop():
         deadline = time.time() + timeout
         while True:
-            # Stop if flag written by clawdy-mcp's telegram_send
             if STOP_TYPING.exists():
                 STOP_TYPING.unlink(missing_ok=True)
                 break
-            # Auto-stop after timeout so we don't type forever on no-reply messages
             if time.time() >= deadline:
                 log.info("Typing indicator auto-stopped (timeout)")
                 break
@@ -211,50 +429,329 @@ def start_typing(chat_id, timeout=90):
 
     _typing_thread = threading.Thread(target=_loop, daemon=True)
     _typing_thread.start()
-    log.info(f"Typing indicator started (thread, timeout={timeout}s)")
 
 
 def stop_typing():
-    """Stop the typing indicator thread."""
     global _typing_thread
     if _typing_thread and _typing_thread.is_alive():
         _stop_typing_event.set()
         _typing_thread.join(timeout=2)
-        log.info("Typing indicator stopped")
     _typing_thread = None
 
-def inject_to_claude(message_text, sender_name):
-    """Inject a message into the tmux Claude session."""
+
+# ── Injection queue ───────────────────────────────────────────────────────────
+
+def inject_to_claude(message_text: str, sender_name: str) -> bool:
+    """Inject a single message into the tmux Claude session."""
     ts = datetime.now().strftime("%Y-%m-%d %H:%M")
     display = f"[TELEGRAM from {sender_name} | {ts}]: {message_text}"
-    log.info(f"Injecting to Claude: {display[:80]}")
+    log.info(f"Injecting: {display[:80]}")
     try:
-        subprocess.run([
-            "tmux", "send-keys", "-t", f"{TMUX_SESSION}:{TMUX_WINDOW}",
-            display
-        ], check=True)
+        subprocess.run(
+            ["tmux", "send-keys", "-t", f"{TMUX_SESSION}:{TMUX_WINDOW}", display],
+            check=True
+        )
         time.sleep(0.3)
-        subprocess.run([
-            "tmux", "send-keys", "-t", f"{TMUX_SESSION}:{TMUX_WINDOW}",
-            "", "Enter"
-        ], check=True)
+        subprocess.run(
+            ["tmux", "send-keys", "-t", f"{TMUX_SESSION}:{TMUX_WINDOW}", "", "Enter"],
+            check=True
+        )
         return True
     except subprocess.CalledProcessError as e:
-        log.error(f"Failed to inject to tmux: {e}")
+        log.error(f"tmux inject failed: {e}")
         return False
 
 
+def enqueue_injection(text: str, sender: str, source: str = "unknown"):
+    """Queue a message for serialized injection. Thread-safe."""
+    _inject_queue.put({"text": text, "sender": sender, "source": source})
+    log.debug(f"Queued [{source}] from {sender}: {text[:60]}")
+
+
+def _wait_for_idle(max_wait: int = 90):
+    """Wait until Claude's status file shows idle (or until max_wait seconds)."""
+    elapsed = 0
+    while elapsed < max_wait:
+        try:
+            status = STATUS_FILE.read_text().strip()
+            if status != "busy":
+                return
+        except Exception:
+            return
+        time.sleep(2)
+        elapsed += 2
+
+
+def start_injector_thread():
+    """Single background thread that drains the injection queue serially."""
+    def _loop():
+        while True:
+            try:
+                item = _inject_queue.get(timeout=5)
+                _wait_for_idle()
+                inject_to_claude(item["text"], item["sender"])
+                # Small gap between consecutive messages to avoid tmux input collisions
+                time.sleep(0.4)
+            except _queue_module.Empty:
+                continue
+            except Exception as e:
+                log.error(f"Injector thread error: {e}")
+
+    t = threading.Thread(target=_loop, daemon=True, name="injector")
+    t.start()
+    log.info("Injection queue started")
+
+
+# ── Bridge + dashboard HTTP server ────────────────────────────────────────────
+
+class ClawdyHandler(BaseHTTPRequestHandler):
+    """Handles both the peer bridge (POST /inject) and the management dashboard."""
+
+    def log_message(self, fmt, *args):
+        log.debug(f"HTTP: {fmt % args}")
+
+    def do_GET(self):
+        if self.path == "/":
+            self._serve_html()
+        elif self.path == "/stream":
+            self._serve_sse()
+        elif self.path == "/api/services":
+            self._serve_services()
+        elif self.path == "/api/settings":
+            self._serve_settings()
+        elif self.path == "/api/activity":
+            self._serve_activity()
+        elif self.path == "/api/status":
+            self._serve_status()
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(length)
+        try:
+            data = json.loads(body) if body else {}
+        except Exception:
+            data = {}
+
+        if self.path == "/inject":
+            # Peer bridge endpoint — requires API key auth
+            self._handle_inject(data)
+        elif self.path == "/chat":
+            # Dashboard chat injection — no extra auth (Tailscale-gated)
+            self._handle_chat(data)
+        elif self.path == "/api/settings":
+            self._update_settings(data)
+        elif re.match(r"^/api/restart/[a-zA-Z0-9\-\.@]+$", self.path):
+            self._handle_restart()
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    # ── Bridge endpoint (peer bot) ─────────────────────────────────────────
+
+    def _handle_inject(self, data):
+        bridge_key = _get_env("BRIDGE_API_KEY", "")
+        auth = self.headers.get("X-API-Key", "")
+        if bridge_key and auth != bridge_key:
+            self.send_response(403)
+            self.end_headers()
+            self.wfile.write(b"Forbidden")
+            return
+
+        message = data.get("message", "").strip()
+        sender = data.get("sender", "Peer")
+        ts = data.get("timestamp", datetime.now().strftime("%Y-%m-%d %H:%M"))
+
+        if not message:
+            self.send_response(400)
+            self.end_headers()
+            self.wfile.write(b"No message")
+            return
+
+        log.info(f"Bridge inject from {sender}: {message[:80]}")
+        # Use [PEER from ...] prefix so Claude's PEER trigger rule fires
+        display = f"[PEER from {sender} | {ts}]: {message}"
+        enqueue_injection(display, sender, source="peer")
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"queued")
+
+    # ── Dashboard endpoints ────────────────────────────────────────────────
+
+    def _handle_chat(self, data):
+        msg = data.get("message", "").strip()
+        sender = data.get("sender", "Ben (Dashboard)")
+        if not msg:
+            self._json({"ok": False, "error": "empty"}, 400)
+            return
+        enqueue_injection(msg, sender, source="dashboard")
+        self._json({"ok": True, "queued": _inject_queue.qsize()})
+
+    def _handle_restart(self):
+        svc = self.path.split("/api/restart/", 1)[-1]
+        try:
+            subprocess.run(
+                ["sudo", "systemctl", "restart", svc],
+                check=True, timeout=15, capture_output=True
+            )
+            self._json({"ok": True, "restarted": svc})
+        except subprocess.CalledProcessError as e:
+            self._json({"ok": False, "error": e.stderr.decode()[:200]}, 500)
+        except Exception as e:
+            self._json({"ok": False, "error": str(e)}, 500)
+
+    def _serve_html(self):
+        body = DASHBOARD_HTML.encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _serve_sse(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "keep-alive")
+        self.end_headers()
+        last = ""
+        try:
+            while True:
+                r = subprocess.run(
+                    ["tmux", "capture-pane", "-pt", f"{TMUX_SESSION}:{TMUX_WINDOW}", "-e"],
+                    capture_output=True, text=True, timeout=5
+                )
+                content = r.stdout
+                if content != last:
+                    payload = json.dumps({"content": content})
+                    self.wfile.write(f"data: {payload}\n\n".encode())
+                    self.wfile.flush()
+                    last = content
+                time.sleep(0.5)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        except Exception as e:
+            log.debug(f"SSE stream ended: {e}")
+
+    def _serve_services(self):
+        # Core services always shown
+        services = ["claude-code.service", "clawdy-telegram-bot.service"]
+        # Auto-discover project services
+        try:
+            r = subprocess.run(
+                ["systemctl", "list-units", "--no-legend", "--no-pager",
+                 "-t", "service", "--state=loaded"],
+                capture_output=True, text=True, timeout=10
+            )
+            for line in r.stdout.splitlines():
+                parts = line.split()
+                if parts:
+                    name = parts[0]
+                    if any(x in name for x in ("meme-scanner", "fomofollow", "clawdy-")):
+                        if name not in services:
+                            services.append(name)
+        except Exception:
+            pass
+
+        statuses = []
+        for svc in services:
+            try:
+                r = subprocess.run(
+                    ["systemctl", "is-active", svc],
+                    capture_output=True, text=True, timeout=5
+                )
+                statuses.append({"name": svc, "active": r.stdout.strip() == "active"})
+            except Exception:
+                statuses.append({"name": svc, "active": False})
+        self._json({"services": statuses})
+
+    def _serve_settings(self):
+        # Expose non-secret settings only
+        hidden = {"TELEGRAM_BOT_TOKEN", "BRIDGE_API_KEY"}
+        settings = {}
+        try:
+            for line in ENV_FILE.read_text().splitlines():
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, _, v = line.partition("=")
+                    k = k.strip()
+                    if k not in hidden:
+                        settings[k] = v.strip()
+        except Exception:
+            pass
+        self._json({"settings": settings})
+
+    def _update_settings(self, data):
+        safe_keys = {"CLAUDE_DEFAULT_MODEL", "BOT_NAME", "BOT_PURPOSE", "LOG_LEVEL"}
+        updated = []
+        try:
+            env_text = ENV_FILE.read_text()
+            for k, v in data.items():
+                if k not in safe_keys:
+                    continue
+                if re.search(f"^{k}=", env_text, re.MULTILINE):
+                    env_text = re.sub(f"^{k}=.*$", f"{k}={v}", env_text, flags=re.MULTILINE)
+                else:
+                    env_text += f"\n{k}={v}"
+                updated.append(k)
+            ENV_FILE.write_text(env_text)
+        except Exception as e:
+            self._json({"ok": False, "error": str(e)}, 500)
+            return
+        self._json({"ok": True, "updated": updated})
+
+    def _serve_activity(self):
+        try:
+            lines = ACTIVITY_LOG.read_text().splitlines()
+            recent = "\n".join(lines[-100:])
+        except Exception:
+            recent = ""
+        self._json({"activity": recent})
+
+    def _serve_status(self):
+        try:
+            status = STATUS_FILE.read_text().strip()
+        except Exception:
+            status = "unknown"
+        self._json({"status": status, "queue_depth": _inject_queue.qsize()})
+
+    def _json(self, data, code=200):
+        body = json.dumps(data).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+# Cached env for use inside the handler (avoids re-reading file on every request)
+_env_cache: dict = {}
+
+
+def _get_env(key: str, default: str = "") -> str:
+    return _env_cache.get(key, default)
+
+
+def start_combined_server(api_key: str, port: int, host: str):
+    """Start the combined bridge + dashboard server on the given host:port."""
+    server = ThreadingHTTPServer((host, port), ClawdyHandler)
+    t = threading.Thread(target=server.serve_forever, daemon=True, name="http-server")
+    t.start()
+    log.info(f"Bridge + dashboard server on {host}:{port}")
+
+
+# ── Telegram polling ──────────────────────────────────────────────────────────
+
 def request_approval(token, admin_chat_id, new_chat_id, sender_name):
-    """Notify the admin (first allowed chat) about a new chat requesting access."""
     msg = (
-        f"🔔 New Telegram chat requesting access to Clawdy:\n"
+        f"New Telegram chat requesting Clawdy access:\n"
         f"Name: {sender_name}\n"
         f"Chat ID: {new_chat_id}\n\n"
-        f"To allow, add this chat ID to TELEGRAM_ALLOWED_CHATS in .env\n"
-        f"or send: /allow {new_chat_id}"
+        f"To allow: /allow {new_chat_id}"
     )
     send_message(token, admin_chat_id, msg)
-    log.info(f"Sent approval request to admin for chat {new_chat_id}")
 
 
 def get_updates(token, offset=None, poll_timeout=30):
@@ -269,64 +766,71 @@ def get_updates(token, offset=None, poll_timeout=30):
         except Exception as e:
             if attempt < 2:
                 delay = 2 ** attempt
-                log.warning(f"getUpdates error, retrying in {delay}s: {e}")
+                log.warning(f"getUpdates error, retry in {delay}s: {e}")
                 time.sleep(delay)
             else:
-                log.error(f"getUpdates error after 3 attempts: {e}")
+                log.error(f"getUpdates failed after 3 attempts: {e}")
     return {"ok": False, "result": []}
 
 
+# ── Main ──────────────────────────────────────────────────────────────────────
+
 def main():
-    global _bot_token
+    global _bot_token, FILES_DIR, _env_cache
+
     log.info("Clawdy Telegram Bot starting...")
     env = load_env()
+    _env_cache = env
+
     token = env.get("TELEGRAM_BOT_TOKEN", "")
     _bot_token = token
 
-    # Set files dir from env or fall back to ~/telegram-files
-    global FILES_DIR
     FILES_DIR = Path(env["TELEGRAM_FILES_DIR"]) if env.get("TELEGRAM_FILES_DIR") else Path.home() / "telegram-files"
+
     if not token or token == "your_bot_token_here":
-        log.error("TELEGRAM_BOT_TOKEN not set in .env")
+        log.error("TELEGRAM_BOT_TOKEN not set")
         sys.exit(1)
 
     cfg = load_config()
 
-    # Parse allowed chats from env (overrides config)
+    # Parse allowed chats from env
     env_allowed = [c.strip() for c in env.get("TELEGRAM_ALLOWED_CHATS", "").split(",") if c.strip()]
     if env_allowed:
         cfg["allowed_chats"] = list(set(cfg["allowed_chats"] + [int(c) for c in env_allowed if c.isdigit()]))
         save_config(cfg)
 
-    # Start bridge server if configured
-    bridge_key = env.get("BRIDGE_API_KEY", "")
-    bridge_port = int(env.get("BRIDGE_PORT", "8765"))
-    if bridge_key:
-        start_bridge_server(bridge_key, bridge_port)
-
-    # Verify bot token works
+    # Verify bot token
     me = tg_request(token, "getMe")
     if not me.get("ok"):
         log.error(f"Bot token invalid: {me}")
         sys.exit(1)
-    bot_name = me["result"]["username"]
-    log.info(f"Bot @{bot_name} connected. Allowed chats: {cfg['allowed_chats']}")
+    log.info(f"Bot @{me['result']['username']} connected. Allowed: {cfg['allowed_chats']}")
 
-    if not cfg["allowed_chats"]:
-        log.info("No allowed chats yet. Send any message to the bot to register your chat ID.")
+    # Start injection queue (serializes all tmux send-keys calls)
+    start_injector_thread()
 
+    # Start combined bridge + dashboard HTTP server
+    bridge_key = env.get("BRIDGE_API_KEY", "")
+    dashboard_port = int(env.get("DASHBOARD_PORT", "8766"))
+    try:
+        import subprocess as _sp
+        ts_ip = _sp.check_output(["tailscale", "ip", "-4"], text=True).strip()
+    except Exception:
+        ts_ip = "0.0.0.0"
+
+    start_combined_server(bridge_key, dashboard_port, ts_ip)
+    log.info(f"Dashboard available at http://{ts_ip}:{dashboard_port}")
+
+    # Main Telegram polling loop
     offset = None
-
     while True:
         data = get_updates(token, offset)
         if not data.get("ok"):
             time.sleep(5)
             continue
 
-        # If we got updates, wait briefly then do a non-blocking follow-up poll
-        # to catch any split-message parts that arrived just after the first poll
-        # returned. Telegram splits messages >4096 chars into consecutive updates
-        # with no "more coming" indicator — the collect window closes the gap.
+        # Collect-window: wait briefly then do a non-blocking follow-up poll
+        # to catch split long messages before injecting
         if data.get("result"):
             time.sleep(0.3)
             next_offset = data["result"][-1]["update_id"] + 1
@@ -334,11 +838,8 @@ def main():
             if followup.get("result"):
                 data["result"].extend(followup["result"])
 
-        # Collect validated messages from this polling batch, grouped by chat.
-        # Multiple parts of a long Telegram message arrive in the same batch —
-        # combining them into one injection avoids the Enter-key-dropped race
-        # condition where part 2 is typed while Claude is still processing part 1.
-        to_inject = {}  # chat_id -> {"sender": str, "texts": [str]}
+        # Group messages by chat for batched injection
+        to_inject: dict[int, dict] = {}
 
         for update in data.get("result", []):
             offset = update["update_id"] + 1
@@ -349,175 +850,92 @@ def main():
             chat_id = msg["chat"]["id"]
             sender = msg["from"].get("first_name", "Unknown")
             text = msg.get("text", "")
-
-            # Caption text (photos/docs can have a caption alongside the file)
             caption = msg.get("caption", "")
 
             if not text:
-                # Check for a supported file attachment
                 file_id, filename_hint, file_size = get_file_info(msg)
                 if file_id and chat_id in cfg["allowed_chats"]:
                     if file_size and file_size > FILE_SIZE_LIMIT:
-                        send_message(token, chat_id, f"⚠️ File too large ({file_size // (1024*1024)} MB). Max is 20 MB.")
+                        send_message(token, chat_id, f"File too large ({file_size // (1024*1024)} MB). Max 20 MB.")
                         continue
                     is_voice = filename_hint == "voice.ogg" or "voice" in msg
                     if is_voice:
-                        send_message(token, chat_id, "🎙️ Transcribing voice message...")
+                        send_message(token, chat_id, "Transcribing voice message...")
                     else:
-                        send_message(token, chat_id, f"📥 Downloading {filename_hint}...")
+                        send_message(token, chat_id, f"Downloading {filename_hint}...")
                     local_path = download_file(token, file_id, filename_hint)
                     if local_path:
                         if is_voice:
                             transcribed = transcribe_voice(local_path)
                             if transcribed:
-                                text = transcribed
-                                if caption:
-                                    text += f" {caption}"
+                                text = transcribed + (f" {caption}" if caption else "")
                             else:
-                                send_message(token, chat_id, "⚠️ Could not transcribe voice message.")
+                                send_message(token, chat_id, "Could not transcribe voice message.")
                                 continue
                         else:
-                            text = f"[File received from Telegram — use Read tool to view: {local_path}]"
+                            text = f"[File received — use Read tool: {local_path}]"
                             if caption:
                                 text += f" Caption: {caption}"
                     else:
-                        send_message(token, chat_id, "⚠️ Failed to download the file. Try again.")
+                        send_message(token, chat_id, "Failed to download file. Try again.")
                         continue
                 elif chat_id in cfg["allowed_chats"]:
-                    send_message(token, chat_id, "⚠️ Unsupported message type.")
+                    send_message(token, chat_id, "Unsupported message type.")
                     continue
                 else:
                     continue
 
-            # Handle /allow command from allowed chats
+            # /allow command
             if text.startswith("/allow ") and chat_id in cfg["allowed_chats"]:
                 new_id = text.split()[-1]
                 if new_id.lstrip("-").isdigit():
                     cfg["allowed_chats"].append(int(new_id))
                     save_config(cfg)
-                    send_message(token, chat_id, f"✅ Chat {new_id} added to allowed list.")
+                    send_message(token, chat_id, f"Chat {new_id} added.")
                 continue
 
-            # First-ever message — auto-register as the owner chat
+            # First-ever message — auto-register owner
             if not cfg["allowed_chats"]:
-                log.info(f"First message from {sender} (chat {chat_id}) — registering as owner")
+                log.info(f"First message from {sender} ({chat_id}) — registering as owner")
                 cfg["allowed_chats"].append(chat_id)
                 save_config(cfg)
                 send_message(token, chat_id,
-                    f"✅ Hi {sender}! I've registered your chat as the owner.\n"
-                    f"Your Chat ID: {chat_id}\n"
-                    f"Messages here will be forwarded to Clawdy."
-                )
-                # Also update the .env file
+                    f"Hi {sender}! Registered your chat as owner (ID: {chat_id}).")
                 env_text = ENV_FILE.read_text()
                 env_text = env_text.replace("TELEGRAM_CHAT_ID=", f"TELEGRAM_CHAT_ID={chat_id}")
                 env_text = env_text.replace("TELEGRAM_ALLOWED_CHATS=", f"TELEGRAM_ALLOWED_CHATS={chat_id}")
                 ENV_FILE.write_text(env_text)
                 continue
 
-            # Check if chat is allowed
             if chat_id not in cfg["allowed_chats"]:
-                log.warning(f"Message from unauthorized chat {chat_id} ({sender}): {text[:50]}")
+                log.warning(f"Unauthorized chat {chat_id} ({sender}): {text[:50]}")
                 if cfg["allowed_chats"]:
                     request_approval(token, cfg["allowed_chats"][0], chat_id, sender)
-                send_message(token, chat_id, "⛔ This chat is not authorized. The owner has been notified.")
+                send_message(token, chat_id, "Not authorized.")
                 continue
 
             log.info(f"Message from {sender} ({chat_id}): {text[:80]}")
 
-            # Rate limiting: max 5 messages per 30 seconds per chat_id
+            # Rate limiting
             now = time.time()
             _rate_limit.setdefault(chat_id, [])
             _rate_limit[chat_id] = [t for t in _rate_limit[chat_id] if now - t < 30]
             if len(_rate_limit[chat_id]) >= 5:
-                send_message(token, chat_id, "⚠️ Slow down — I can only handle 5 messages per 30 seconds.")
+                send_message(token, chat_id, "Too fast — max 5 messages per 30 seconds.")
                 continue
             _rate_limit[chat_id].append(now)
 
-            # Queue for batched injection
             if chat_id not in to_inject:
                 to_inject[chat_id] = {"sender": sender, "texts": []}
             to_inject[chat_id]["texts"].append(text)
 
-        # Inject each chat's messages as a single combined injection.
-        # Parts of a long Telegram message are joined with a blank line so
-        # Claude sees one coherent message instead of two racing injections.
+        # Inject each chat's messages
         for chat_id, batch in to_inject.items():
             combined = "\n\n".join(batch["texts"])
             if len(batch["texts"]) > 1:
-                log.info(f"Combining {len(batch['texts'])} parts into one injection for chat {chat_id}")
+                log.info(f"Combining {len(batch['texts'])} parts for chat {chat_id}")
             start_typing(chat_id)
-            success = inject_to_claude(combined, batch["sender"])
-            if not success:
-                stop_typing()
-                send_message(token, chat_id, "⚠️ Failed to reach Clawdy session. Is it running?")
-
-
-def start_bridge_server(api_key: str, port: int):
-    """Start a lightweight HTTP server for bot-to-bot injection over Tailscale."""
-
-    class BridgeHandler(BaseHTTPRequestHandler):
-        def log_message(self, fmt, *args):
-            log.debug(f"Bridge: {fmt % args}")
-
-        def do_POST(self):
-            if self.path != "/inject":
-                self.send_response(404)
-                self.end_headers()
-                return
-
-            auth = self.headers.get("X-API-Key", "")
-            if auth != api_key:
-                self.send_response(403)
-                self.end_headers()
-                self.wfile.write(b"Forbidden")
-                return
-
-            length = int(self.headers.get("Content-Length", 0))
-            body = self.rfile.read(length)
-            try:
-                data = json.loads(body)
-                message = data.get("message", "").strip()
-                sender = data.get("sender", "Peer")
-                ts = data.get("timestamp", datetime.now().strftime("%Y-%m-%d %H:%M"))
-            except Exception:
-                self.send_response(400)
-                self.end_headers()
-                self.wfile.write(b"Bad JSON")
-                return
-
-            if not message:
-                self.send_response(400)
-                self.end_headers()
-                self.wfile.write(b"No message")
-                return
-
-            log.info(f"Bridge inject from {sender}: {message[:80]}")
-            # Use [PEER from ...] prefix so the bot's PEER trigger rule fires (not TELEGRAM)
-            display = f"[PEER from {sender} | {ts}]: {message}"
-            try:
-                subprocess.run(["tmux", "send-keys", "-t", f"{TMUX_SESSION}:{TMUX_WINDOW}", display], check=True)
-                time.sleep(0.3)
-                subprocess.run(["tmux", "send-keys", "-t", f"{TMUX_SESSION}:{TMUX_WINDOW}", "", "Enter"], check=True)
-                ok = True
-            except subprocess.CalledProcessError as e:
-                log.error(f"Bridge tmux inject failed: {e}")
-                ok = False
-            self.send_response(200 if ok else 500)
-            self.end_headers()
-            self.wfile.write(b"ok" if ok else b"inject failed")
-
-    # Bind to Tailscale interface only (or all if not available)
-    try:
-        import subprocess as _sp
-        ts_ip = _sp.check_output(["tailscale", "ip", "-4"], text=True).strip()
-    except Exception:
-        ts_ip = "0.0.0.0"
-
-    server = HTTPServer((ts_ip, port), BridgeHandler)
-    t = threading.Thread(target=server.serve_forever, daemon=True)
-    t.start()
-    log.info(f"Bridge server listening on {ts_ip}:{port}")
+            enqueue_injection(combined, batch["sender"], source="telegram")
 
 
 if __name__ == "__main__":
