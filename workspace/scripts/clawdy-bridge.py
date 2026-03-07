@@ -50,6 +50,9 @@ FILE_SIZE_LIMIT = 20 * 1024 * 1024  # 20 MB
 # Rate limiting: max 5 messages per 30 seconds per chat_id
 _rate_limit: dict[int, list[float]] = {}
 
+# Restart context: set by MCP before planned restart; None = no planned restart pending
+_restart_pending: str | None = None  # the resume context message
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -795,6 +798,8 @@ class ClawdyHandler(BaseHTTPRequestHandler):
             self._update_settings(data)
         elif re.match(r"^/api/restart/[a-zA-Z0-9\-\.@]+$", self.path):
             self._handle_restart()
+        elif self.path == "/api/restart-context":
+            self._handle_restart_context(data)
         elif self.path == "/api/claude-start":
             self._handle_claude_start()
         else:
@@ -846,6 +851,17 @@ class ClawdyHandler(BaseHTTPRequestHandler):
             return
         enqueue_injection(msg, sender, source=source)
         self._json({"ok": True, "queued": _inject_queue.qsize()})
+
+    def _handle_restart_context(self, data):
+        """MCP calls this before triggering a planned restart to store resume context."""
+        global _restart_pending
+        context = data.get("context", "").strip()
+        if context:
+            _restart_pending = context
+            log.info(f"Restart context stored: {context[:80]}")
+            self._json({"ok": True})
+        else:
+            self._json({"ok": False, "error": "no context"}, 400)
 
     def _handle_restart(self):
         svc = self.path.split("/api/restart/", 1)[-1]
@@ -1178,6 +1194,54 @@ def get_updates(token, offset=None, poll_timeout=30):
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
+def start_crash_monitor():
+    """Background thread: detects unexpected Claude crashes and queues a crash recovery message."""
+    import time as _time
+
+    def _loop():
+        global _restart_pending
+        was_alive = True
+        _time.sleep(30)  # Give Claude time to start on first boot
+        while True:
+            try:
+                r = subprocess.run(
+                    ["tmux", "has-session", "-t", f"{TMUX_SESSION}:{TMUX_WINDOW}"],
+                    capture_output=True, timeout=3
+                )
+                is_alive = r.returncode == 0
+            except Exception:
+                is_alive = False
+
+            if was_alive and not is_alive:
+                # Claude just went offline
+                if _restart_pending is not None:
+                    # Planned restart — queue the resume context
+                    resume = _restart_pending
+                    _restart_pending = None
+                    log.info(f"Planned restart detected — queuing resume context: {resume[:60]}")
+                    enqueue_injection("continue", "system", source="restart")
+                    log_chat_history("in", "system",
+                                     f"[RESTART] Planned restart. Resume context: {resume}",
+                                     source="restart")
+                else:
+                    # Unplanned crash
+                    log.warning("Claude crash detected — queuing crash recovery message")
+                    crash_msg = (
+                        "RESTART CONTEXT: you crashed. find out why and fix the issue then continue where you left off"
+                    )
+                    enqueue_injection(crash_msg, "system", source="restart")
+                    log_chat_history("in", "system",
+                                     "[RESTART] YOU CRASHED — find the cause, fix it, continue your work",
+                                     source="restart")
+
+            was_alive = is_alive
+            _time.sleep(5)
+
+    t = threading.Thread(target=_loop, daemon=True, name="crash-monitor")
+    t.start()
+    log.info("Crash monitor started")
+
+
 def main():
     global _bot_token, FILES_DIR, _env_cache
 
@@ -1214,6 +1278,7 @@ def main():
 
     # Start injection queue (serializes all tmux send-keys calls)
     start_injector_thread()
+    start_crash_monitor()
 
     # Start combined bridge + dashboard HTTP server
     bridge_key = env.get("BRIDGE_API_KEY", "")
