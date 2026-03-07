@@ -254,38 +254,41 @@ function switchTab(name) {
 }
 
 // SSE tmux stream
+let _claudeAlive = true;
+
+function applyStatus(d) {
+  _claudeAlive = d.alive;
+  let cls = 'dot', label = d.status;
+  if (!d.alive) { cls += ' offline'; label = 'offline'; }
+  else if (d.status === 'busy') { cls += ' busy'; label = 'busy'; }
+  dot.className = cls;
+  statusText.textContent = label;
+  document.getElementById('chat-btn').classList.toggle('offline', !d.alive);
+  if (d.queue_depth > 0) {
+    queueBadge.style.display = '';
+    queueBadge.textContent = 'queue: ' + d.queue_depth;
+  } else {
+    queueBadge.style.display = 'none';
+  }
+}
+
+// Single SSE stream pushes terminal, status, and new messages
 const es = new EventSource('/stream');
-es.onmessage = (e) => {
+es.addEventListener('terminal', (e) => {
   const d = JSON.parse(e.data);
   const atBottom = term.scrollHeight - term.scrollTop <= term.clientHeight + 60;
   term.textContent = d.content;
   if (atBottom) term.scrollTop = term.scrollHeight;
   document.getElementById('ts-label').textContent = new Date().toLocaleTimeString();
-};
+});
+es.addEventListener('status', (e) => { applyStatus(JSON.parse(e.data)); });
+es.addEventListener('message', (e) => {
+  const msgs = JSON.parse(e.data);
+  const atBottom = chatLog.scrollHeight - chatLog.scrollTop <= chatLog.clientHeight + 80;
+  msgs.forEach(m => renderMsg(m));
+  if (atBottom) chatLog.scrollTop = chatLog.scrollHeight;
+});
 es.onerror = () => { statusText.textContent = 'stream error'; dot.className = 'dot unknown'; };
-
-// Status polling
-let _claudeAlive = true;
-function pollStatus() {
-  fetch('/api/status').then(r=>r.json()).then(d=>{
-    _claudeAlive = d.alive;
-    let cls = 'dot', label = d.status;
-    if (!d.alive) { cls += ' offline'; label = 'offline'; }
-    else if (d.status === 'busy') { cls += ' busy'; label = 'busy'; }
-    dot.className = cls;
-    statusText.textContent = label;
-    const btn = document.getElementById('chat-btn');
-    btn.classList.toggle('offline', !d.alive);
-    if (d.queue_depth > 0) {
-      queueBadge.style.display = '';
-      queueBadge.textContent = 'queue: ' + d.queue_depth;
-    } else {
-      queueBadge.style.display = 'none';
-    }
-  }).catch(()=>{});
-}
-setInterval(pollStatus, 3000);
-pollStatus();
 
 // Chat history
 let _lastTs = 0;
@@ -308,9 +311,9 @@ function renderMarkdown(text) {
   // Bold
   s = s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
   // Italic (but not inside bold)
-  s = s.replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, '<em>$1</em>');
+  s = s.replace(/\*([^*]+)\*/g, '<em>$1</em>');
   // Inline code
-  s = s.replace(/`([^`\n]+)`/g, '<code style="background:#2a2a2a;padding:1px 5px;border-radius:4px;font-size:12px;font-family:monospace">$1</code>');
+  s = s.replace(/`([^`]+)`/g, '<code style="background:#2a2a2a;padding:1px 5px;border-radius:4px;font-size:12px;font-family:monospace">$1</code>');
   // Headers → bold line
   s = s.replace(/^#{1,3} (.+)$/gm, '<strong>$1</strong>');
   return s;
@@ -376,20 +379,7 @@ function loadMore() {
   }).catch(()=>{});
 }
 
-function pollNewMessages() {
-  if (_lastTs === 0) return;
-  fetch('/api/chat-history?since='+_lastTs+'&limit=100').then(r=>r.json()).then(d=>{
-    const msgs = d.messages || [];
-    if (msgs.length > 0) {
-      const atBottom = chatLog.scrollHeight - chatLog.scrollTop <= chatLog.clientHeight + 80;
-      msgs.forEach(m => renderMsg(m));
-      if (atBottom) chatLog.scrollTop = chatLog.scrollHeight;
-    }
-  }).catch(()=>{});
-}
-
 loadHistory();
-setInterval(pollNewMessages, 2000);
 
 // Chat send
 function sendChat() {
@@ -924,27 +914,82 @@ class ClawdyHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _get_status_data(self):
+        try:
+            r = subprocess.run(
+                ["tmux", "has-session", "-t", f"{TMUX_SESSION}:{TMUX_WINDOW}"],
+                capture_output=True, timeout=3
+            )
+            alive = r.returncode == 0
+        except Exception:
+            alive = False
+        try:
+            status = STATUS_FILE.read_text().strip() if alive else "offline"
+        except Exception:
+            status = "idle" if alive else "offline"
+        return {"alive": alive, "status": status, "queue_depth": _inject_queue.qsize()}
+
     def _serve_sse(self):
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
         self.send_header("Connection", "keep-alive")
         self.end_headers()
-        last = ""
+
+        def push(event, data):
+            msg = f"event: {event}\ndata: {json.dumps(data)}\n\n".encode()
+            self.wfile.write(msg)
+            self.wfile.flush()
+
+        last_term = ""
+        last_status = None
+        last_chat_ts = 0.0
+        tick = 0
         try:
+            # Send initial status immediately
+            st = self._get_status_data()
+            push("status", st)
+            last_status = st
+
             while True:
+                # Terminal (every tick = 0.5s)
                 r = subprocess.run(
                     ["tmux", "capture-pane", "-pt", f"{TMUX_SESSION}:{TMUX_WINDOW}"],
                     capture_output=True, text=True, timeout=5
                 )
-                # Strip ANSI escape codes and trailing whitespace per line
                 raw = re.sub(r'\x1b\[[0-9;]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b[^[Oc]', '', r.stdout)
-                content = "\n".join(line.rstrip() for line in raw.splitlines()).strip()
-                if content != last:
-                    payload = json.dumps({"content": content})
-                    self.wfile.write(f"data: {payload}\n\n".encode())
-                    self.wfile.flush()
-                    last = content
+                term_content = "\n".join(line.rstrip() for line in raw.splitlines()).strip()
+                if term_content != last_term:
+                    push("terminal", {"content": term_content})
+                    last_term = term_content
+
+                # Status (every 6 ticks = 3s)
+                if tick % 6 == 0:
+                    st = self._get_status_data()
+                    if st != last_status:
+                        push("status", st)
+                        last_status = st
+
+                # New chat messages (every 4 ticks = 2s)
+                if tick % 4 == 0 and CHAT_HISTORY.exists():
+                    new_msgs = []
+                    try:
+                        for line in CHAT_HISTORY.read_text().splitlines():
+                            if not line.strip():
+                                continue
+                            try:
+                                m = json.loads(line)
+                                if m.get("ts", 0) > last_chat_ts:
+                                    new_msgs.append(m)
+                                    last_chat_ts = max(last_chat_ts, m["ts"])
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+                    if new_msgs:
+                        push("message", new_msgs)
+
+                tick += 1
                 time.sleep(0.5)
         except (BrokenPipeError, ConnectionResetError):
             pass
@@ -1181,7 +1226,7 @@ def main():
     except Exception:
         ts_ip = "0.0.0.0"
 
-    start_combined_server(bridge_key, dashboard_port, ts_ip)
+    start_combined_server(bridge_key, dashboard_port, "0.0.0.0")
     log.info(f"Dashboard available at http://{ts_ip}:{dashboard_port}")
 
     # Main Telegram polling loop
