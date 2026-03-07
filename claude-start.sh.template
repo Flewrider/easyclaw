@@ -1,32 +1,22 @@
 #!/bin/bash
-# claude-start.sh — starts a persistent tmux-wrapped Claude Code session.
-# Accessible via: tmux attach -t claude
-# Managed by systemd (claude-code.service)
-
-# Ensure claude is on PATH (installed to ~/.local/bin by the official installer)
-export PATH="%%HOME%%/.local/bin:$PATH"
+export PATH="/home/ben/.local/bin:$PATH"
 
 SESSION="claude"
-WORKDIR="%%HOME%%"
-CLAUDE="%%HOME%%/.local/bin/claude"
-EASYCLAW="%%HOME%%/.easyclaw"
+WORKDIR="/home/ben"
+CLAUDE="/home/ben/.local/bin/claude"
+EASYCLAW="/home/ben/.easyclaw"
 RESTART_HISTORY="$EASYCLAW/restart-history"
+BRIDGE_PORT=$(grep "^BRIDGE_PORT=" "$EASYCLAW/.env" 2>/dev/null | cut -d= -f2)
+BRIDGE_PORT="${BRIDGE_PORT:-8765}"
 export IS_SANDBOX=1
 
 mkdir -p "$EASYCLAW"
 echo "idle" > "$EASYCLAW/status"
 
-# ── Restart loop detection ─────────────────────────────────────────────────
-# Log this startup timestamp
+# ── Restart loop detection ────────────────────────────────────────────────
 echo "$(date +%s)" >> "$RESTART_HISTORY"
-
-# Trim history to last 20 entries
-tail -20 "$RESTART_HISTORY" > "$RESTART_HISTORY.tmp" 2>/dev/null \
-    && mv "$RESTART_HISTORY.tmp" "$RESTART_HISTORY"
-
-# Count how many restarts occurred in the last 180 seconds
-NOW=$(date +%s)
-RECENT=0
+tail -20 "$RESTART_HISTORY" > "$RESTART_HISTORY.tmp" 2>/dev/null && mv "$RESTART_HISTORY.tmp" "$RESTART_HISTORY"
+NOW=$(date +%s); RECENT=0
 while IFS= read -r ts; do
     [ -n "$ts" ] && [ $(( NOW - ts )) -le 180 ] && RECENT=$(( RECENT + 1 ))
 done < "$RESTART_HISTORY"
@@ -34,75 +24,57 @@ done < "$RESTART_HISTORY"
 if [ "$RECENT" -ge 4 ]; then
     TIMESTAMP=$(date '+%Y-%m-%d %H:%M')
     LOG="$EASYCLAW/activity-log.md"
-    echo "[$TIMESTAMP] system: Restart loop detected ($RECENT restarts in 3 min) — spawning headless recovery agent" >> "$LOG"
-
-    # Send Telegram alert if configured
-    if [ -f "$EASYCLAW/.env" ]; then
-        TOKEN=$(grep "^TELEGRAM_BOT_TOKEN=" "$EASYCLAW/.env" 2>/dev/null | cut -d= -f2)
-        CHAT_ID=$(grep "^TELEGRAM_CHAT_ID=" "$EASYCLAW/.env" 2>/dev/null | cut -d= -f2 | cut -d, -f1)
-        if [ -n "$TOKEN" ] && [ -n "$CHAT_ID" ]; then
-            curl -s --max-time 10 \
-                "https://api.telegram.org/bot${TOKEN}/sendMessage" \
-                -d "chat_id=${CHAT_ID}" \
-                --data-urlencode "text=⚠️ Clawdy restart loop: $RECENT crashes in 3 min. Spawning headless recovery agent — check ~/.easyclaw/recovery-agent.log for progress." \
-                > /dev/null 2>&1 || true
-        fi
-    fi
-
-    # Clear restart history so the fix doesn't re-trigger the detector
+    echo "[$TIMESTAMP] system: Restart loop ($RECENT in 3min) — recovery agent" >> "$LOG"
+    TOKEN=$(grep "^TELEGRAM_BOT_TOKEN=" "$EASYCLAW/.env" 2>/dev/null | cut -d= -f2)
+    CHAT_ID=$(grep "^TELEGRAM_CHAT_ID=" "$EASYCLAW/.env" 2>/dev/null | cut -d= -f2 | cut -d, -f1)
+    [ -n "$TOKEN" ] && [ -n "$CHAT_ID" ] && curl -s --max-time 10 \
+        "https://api.telegram.org/bot${TOKEN}/sendMessage" \
+        -d "chat_id=${CHAT_ID}" --data-urlencode "text=⚠️ Restart loop: $RECENT crashes in 3min. Recovery agent spawned." > /dev/null 2>&1 || true
     echo "" > "$RESTART_HISTORY"
-
-    # Spawn headless recovery agent (non-blocking, logs to recovery-agent.log)
-    nohup "$CLAUDE" -p "RECOVERY MODE: The Clawdy systemd service (claude-code.service) has crashed $RECENT times in the last 3 minutes and is stuck in a restart loop. Your job is to diagnose and fix the root cause. Steps: 1) Check service logs: journalctl -u claude-code --no-pager -n 100 2) Check activity log: tail -40 ~/.easyclaw/activity-log.md 3) Check Claude settings: cat ~/.claude/settings.json 4) Check Claude config: cat ~/.claude.json 5) Check the start script: cat ~/claude-start.sh 6) Look for syntax errors, missing files, bad paths, or config issues 7) Fix the root cause 8) When fixed, restart the service with: sudo systemctl restart claude-code (this will kill this recovery process and start a fresh session). Be thorough — do not restart until you have actually fixed the underlying issue." \
-        --dangerously-skip-permissions \
-        > "$EASYCLAW/recovery-agent.log" 2>&1 &
-
-    AGENT_PID=$!
-    echo "[$TIMESTAMP] system: Recovery agent spawned (PID $AGENT_PID) — service blocked for up to 20 min" >> "$LOG"
-
-    # Block so systemd doesn't keep restarting while recovery is in progress.
-    # The recovery agent will call `sudo systemctl restart claude-code` when done,
-    # which kills this sleep and starts a fresh session.
+    nohup "$CLAUDE" -p "RECOVERY MODE: crashed $RECENT times in 3min. Check: journalctl -u claude-code -n 100; tail -40 ~/.easyclaw/activity-log.md; cat ~/claude-start.sh — fix root cause then: sudo systemctl restart claude-code" \
+        --dangerously-skip-permissions > "$EASYCLAW/recovery-agent.log" 2>&1 &
     exec sleep 1200
 fi
-# ── End restart loop detection ─────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────
 
-# Kill any stale tmux session
+# Determine restart context
+LAUNCHED="$EASYCLAW/has-launched"
+RESUME="$EASYCLAW/restart-resume"
+CTX_FILE="$EASYCLAW/current-context"
+
+if [ ! -f "$LAUNCHED" ]; then
+    touch "$LAUNCHED"
+    cat > "$CTX_FILE" <<'CTX'
+FIRST LAUNCH: This is the very first startup after installation. Send a Telegram greeting to let the user know you are online, then ask if they would like to run onboarding (name, timezone, primary use cases, daily briefing preference). Save responses to memory.
+CTX
+elif [ -f "$RESUME" ]; then
+    cp "$RESUME" "$CTX_FILE"
+    rm -f "$RESUME"
+else
+    cat > "$CTX_FILE" <<'CTX'
+RESTART CONTEXT: you crashed unexpectedly. Check ~/.easyclaw/activity-log.md for recent work, find the cause if possible, then continue where you left off.
+CTX
+fi
+
+# Log to dashboard so it shows as first SYS bubble in chat
+PAYLOAD=$(python3 -c "
+import json, sys
+ctx = open(sys.argv[1]).read().strip()
+print(json.dumps({'message': ctx, 'source': 'restart', 'sender': 'system'}))
+" "$CTX_FILE" 2>/dev/null)
+[ -n "$PAYLOAD" ] && curl -sf --max-time 3 -X POST "http://127.0.0.1:$BRIDGE_PORT/chat" \
+    -H 'Content-Type: application/json' -d "$PAYLOAD" > /dev/null 2>&1 || true
+
+# Kill stale session
 tmux kill-session -t "$SESSION" 2>/dev/null
 
-# Start Claude Code inside tmux.
-# Each restart reads the restart-resume file (if present), deletes it, then launches
-# claude with /remote-control as the initial prompt and the restart context baked into
-# --append-system-prompt. Falls back to crash message if no resume file exists.
+# Start Claude — context passed as first positional arg (guaranteed first prompt)
+# Written to file to safely handle quotes/special chars in the shell command
 tmux new-session -d -s "$SESSION" -c "$WORKDIR" -n "claude" \
   "while true; do \
-    LAUNCHED=\"%%HOME%%/.easyclaw/has-launched\"; \
-    RESUME=\"%%HOME%%/.easyclaw/restart-resume\"; \
-    if [ ! -f \"\$LAUNCHED\" ]; then \
-      touch \"\$LAUNCHED\"; \
-      MSG=\"FIRST LAUNCH: This is the very first startup after installation. Send a Telegram greeting to let the user know you are online, then ask if they would like to run onboarding (name, timezone, primary use cases, daily briefing preference). Save responses to memory.\"; \
-    elif [ -f \"\$RESUME\" ]; then \
-      MSG=\$(cat \"\$RESUME\"); rm -f \"\$RESUME\"; \
-    else \
-      MSG=\"you crashed. find out why and fix the issue then continue where you left off\"; \
-    fi; \
-    $CLAUDE \"/remote-control\" --continue --dangerously-skip-permissions --chrome \
-      --append-system-prompt \"RESTART CONTEXT: \$MSG\" \
-    || $CLAUDE \"/remote-control\" --dangerously-skip-permissions --chrome \
-      --append-system-prompt \"RESTART CONTEXT: \$MSG\"; \
+    $CLAUDE \"\$(cat $CTX_FILE)\" --continue --dangerously-skip-permissions --chrome \
+    || $CLAUDE \"\$(cat $CTX_FILE)\" --dangerously-skip-permissions --chrome; \
     echo '[claude exited — restarting in 3s...]'; sleep 3; \
   done"
 
-# Wait for Claude to finish loading (MCP servers take time to init)
-sleep 15
-
-# Inject "continue" — nudges Claude to read the RESTART CONTEXT from the system prompt
-# and act on it (send Telegram update, resume task, etc.)
-tmux send-keys -t "$SESSION:claude" "continue"
-sleep 1
-tmux send-keys -t "$SESSION:claude" "" C-m
-
-# Block until tmux session ends so systemd can track and restart
-while tmux has-session -t "$SESSION" 2>/dev/null; do
-  sleep 2
-done
+while tmux has-session -t "$SESSION" 2>/dev/null; do sleep 2; done

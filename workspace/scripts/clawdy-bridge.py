@@ -707,27 +707,20 @@ def enqueue_injection(text: str, sender: str, source: str = "telegram"):
 
 
 def _wait_for_alive(max_wait: int = 300):
-    """Wait until Claude Code is actually running inside the tmux pane.
-    tmux has-session returns true before Claude starts — we check the pane process."""
+    """Wait until Claude Code UI is visible in the tmux pane.
+    The pane command is always 'bash' (while-loop wrapper), so we check pane content
+    for Claude Code's signature UI markers instead."""
     elapsed = 0
     while elapsed < max_wait:
-        # Check 1: session exists
         r = subprocess.run(
-            ["tmux", "has-session", "-t", f"{TMUX_SESSION}:{TMUX_WINDOW}"],
-            capture_output=True
+            ["tmux", "capture-pane", "-pt", f"{TMUX_SESSION}:{TMUX_WINDOW}"],
+            capture_output=True, text=True, timeout=5
         )
         if r.returncode == 0:
-            # Check 2: Claude Code (node) is running in the pane, not just bash/sleep
-            r2 = subprocess.run(
-                ["tmux", "list-panes", "-t", f"{TMUX_SESSION}:{TMUX_WINDOW}",
-                 "-F", "#{pane_current_command}"],
-                capture_output=True, text=True
-            )
-            cmd = r2.stdout.strip()
-            if cmd and cmd not in ("bash", "sh", "zsh", "sleep", ""):
+            pane = r.stdout
+            if "esc to interrupt" in pane or "❯" in pane:
                 return True
-        pane_cmd = r2.stdout.strip() if r.returncode == 0 else "no session"
-        log.info(f"Claude not ready (pane: {pane_cmd!r}) — waiting ({elapsed}s)...")
+        log.info(f"Claude not ready — waiting ({elapsed}s elapsed)...")
         time.sleep(3)
         elapsed += 3
     log.warning("Claude never came online — dropping message")
