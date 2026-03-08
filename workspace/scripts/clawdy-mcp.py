@@ -56,6 +56,7 @@ TASKS_FILE    = EASYCLAW / "tasks.md"
 AGENT_LOG     = EASYCLAW / "agent-sessions.jsonl"
 STOP_TYPING   = EASYCLAW / "stop-typing"
 REMINDERS_FILE = EASYCLAW / "reminders.json"
+PROJECTS_FILE  = EASYCLAW / "projects.json"
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -354,6 +355,17 @@ def impl_send_to_peer(message: str, sender: str = "SuperClawdy") -> str:
 
     ok, err = _attempt()
     if ok:
+        # Log outgoing peer message to local dashboard
+        try:
+            bridge_port = env.get("BRIDGE_PORT", "8765")
+            import requests as _req2
+            _req2.post(
+                f"http://127.0.0.1:{bridge_port}/chat",
+                json={"message": message, "sender": "SuperClawdy", "source": "peer-out", "dir": "out"},
+                timeout=3,
+            )
+        except Exception:
+            pass
         return f"Sent to peer: {message[:80]}"
 
     # First attempt failed — retry in background so MCP isn't blocked for 30s
@@ -692,6 +704,44 @@ async def impl_converse_with_agent(
     except (json.JSONDecodeError, KeyError) as e:
         return f"Failed to parse agent output: {e}\nRaw: {stdout.decode()[:500]}"
 
+
+# ── Project tools ─────────────────────────────────────────────────────────────
+
+def _load_projects() -> list:
+    try:
+        return json.loads(PROJECTS_FILE.read_text()) if PROJECTS_FILE.exists() else []
+    except Exception:
+        return []
+
+def _save_projects(projects: list) -> None:
+    PROJECTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    PROJECTS_FILE.write_text(json.dumps(projects, indent=2))
+
+def impl_project_add(name: str, path: str, description: str = "") -> str:
+    projects = _load_projects()
+    if any(p["name"].lower() == name.lower() for p in projects):
+        return f"Project '{name}' already exists."
+    projects.append({"name": name, "path": path, "description": description})
+    _save_projects(projects)
+    return f"Project '{name}' added at {path}."
+
+def impl_project_list() -> str:
+    projects = _load_projects()
+    if not projects:
+        return "No projects tracked yet."
+    lines = []
+    for p in projects:
+        desc = f" — {p['description']}" if p.get("description") else ""
+        lines.append(f"• {p['name']}: {p['path']}{desc}")
+    return "\n".join(lines)
+
+def impl_project_delete(name: str) -> str:
+    projects = _load_projects()
+    new = [p for p in projects if p["name"].lower() != name.lower()]
+    if len(new) == len(projects):
+        return f"Project '{name}' not found."
+    _save_projects(new)
+    return f"Project '{name}' removed."
 
 # ── Reminder tools ────────────────────────────────────────────────────────────
 
@@ -1115,6 +1165,35 @@ async def list_tools() -> list[types.Tool]:
                 "required": ["session_id", "prompt"],
             },
         ),
+        types.Tool(
+            name="project_add",
+            description="Track a new project by name, local path, and optional description.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "name":        {"type": "string", "description": "Short project name (e.g. FomoFollow)"},
+                    "path":        {"type": "string", "description": "Absolute path to the project directory"},
+                    "description": {"type": "string", "description": "One-line description of the project"},
+                },
+                "required": ["name", "path"],
+            },
+        ),
+        types.Tool(
+            name="project_list",
+            description="List all tracked projects with their paths and descriptions.",
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        types.Tool(
+            name="project_delete",
+            description="Remove a project from tracking (does not delete files).",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Project name to remove"},
+                },
+                "required": ["name"],
+            },
+        ),
     ]
 
 
@@ -1179,6 +1258,12 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextCont
                 arguments.get("model", "claude-haiku-4-5-20251001"),
                 arguments.get("allowed_tools"),
             )
+        elif name == "project_add":
+            result = impl_project_add(arguments["name"], arguments["path"], arguments.get("description", ""))
+        elif name == "project_list":
+            result = impl_project_list()
+        elif name == "project_delete":
+            result = impl_project_delete(arguments["name"])
         elif name == "reminder_set":
             result = impl_reminder_set(arguments["message"], arguments["when"])
         elif name == "reminder_list":

@@ -122,6 +122,9 @@ body{background:#0f0f0f;color:#e8e8e8;font-family:-apple-system,'Segoe UI',syste
 /* Peer — left, purple */
 .bubble-wrap.src-peer .bubble{background:#1e1228;border-bottom-left-radius:5px;color:#e8e8e8;border-left:2px solid #af52de}
 .bubble-wrap.src-peer .bubble-sender{color:#af52de}
+.bubble-wrap.src-peer-out{align-items:flex-end}
+.bubble-wrap.src-peer-out .bubble{background:#1a4a2a;color:#e0f5e0}
+.bubble-wrap.src-peer-out .bubble-sender{color:rgba(76,217,100,.75)}
 .bubble-wrap.src-peer .bubble-src{background:#2d1a40;color:#af52de}
 /* Cron — left, orange */
 .bubble-wrap.src-cron .bubble{background:#1e1400;border-bottom-left-radius:5px;color:#e8e8e8;border-left:2px solid #ff9500}
@@ -166,6 +169,15 @@ body{background:#0f0f0f;color:#e8e8e8;font-family:-apple-system,'Segoe UI',syste
 .setting-row label{width:120px;color:#888;flex-shrink:0}
 .setting-row input,.setting-row select{flex:1;background:#2a2a2a;border:1px solid #3a3a3a;border-radius:8px;padding:7px 10px;color:#e8e8e8;font-size:13px;outline:none}
 .setting-row input:focus,.setting-row select:focus{border-color:#007aff}
+.cron-card{background:#1a1a1a;border:1px solid #2a2a2a;border-radius:12px;padding:14px;margin-bottom:14px}
+.cron-card h4{margin:0 0 10px;font-size:13px;color:#e8e8e8;display:flex;align-items:center;gap:8px}
+.cron-card h4 .cron-badge{font-size:10px;background:#2a2a2a;color:#888;border-radius:5px;padding:2px 6px;font-weight:normal}
+.cron-card textarea{width:100%;box-sizing:border-box;background:#0f0f0f;border:1px solid #2a2a2a;border-radius:8px;color:#c9d1d9;font-family:'Courier New',monospace;font-size:12px;padding:8px 10px;resize:vertical;min-height:80px;outline:none}
+.cron-card textarea:focus{border-color:#007aff}
+.cron-card .cron-footer{display:flex;align-items:center;gap:8px;margin-top:8px}
+.cron-card .cron-footer input{flex:1;background:#2a2a2a;border:1px solid #3a3a3a;border-radius:8px;padding:5px 8px;color:#e8e8e8;font-size:12px;font-family:monospace;outline:none}
+.cron-card .cron-footer input:focus{border-color:#007aff}
+.cron-section-title{font-size:11px;color:#555;text-transform:uppercase;letter-spacing:.08em;margin:18px 0 10px;padding-bottom:6px;border-bottom:1px solid #1e1e1e}
 #save-settings{background:#007aff;border:none;border-radius:8px;padding:8px 20px;color:#fff;font-size:13px;cursor:pointer;margin-top:4px}
 #save-settings:hover{background:#0066d6}
 </style>
@@ -192,7 +204,7 @@ body{background:#0f0f0f;color:#e8e8e8;font-family:-apple-system,'Segoe UI',syste
       <button id="load-more" onclick="loadMore()">&#8593; Load earlier</button>
     </div>
     <div id="chat-input-row">
-      <textarea id="chat-in" rows="1" placeholder="Message Claude..."></textarea>
+      <textarea id="chat-in" rows="1" placeholder="Message Claude..." autofocus></textarea>
       <button id="chat-btn" onclick="sendChat()">&#9650;</button>
     </div>
   </div>
@@ -232,6 +244,19 @@ body{background:#0f0f0f;color:#e8e8e8;font-family:-apple-system,'Segoe UI',syste
       </div>
       <button id="save-settings" onclick="saveSettings()">Save &amp; apply</button>
       <p style="margin-top:10px;font-size:11px;color:#555">Model + Effort changes take effect after Clawdy restart.</p>
+      <div class="cron-section-title">Cron Jobs</div>
+      <div id="crons-list"></div>
+      <button onclick="showAddCron()" style="margin-top:4px;font-size:11px;padding:4px 10px;width:auto">+ Add Cron</button>
+      <div id="add-cron-form" style="display:none;margin-top:14px" class="cron-card">
+        <h4>New Cron</h4>
+        <div class="setting-row"><label>Name</label><input id="new-cron-name" placeholder="MY_CRON" /></div>
+        <div class="setting-row"><label>Schedule</label><input id="new-cron-schedule" placeholder="*/30 * * * *" style="font-family:monospace" /></div>
+        <div class="setting-row" style="align-items:flex-start"><label style="padding-top:6px">Instructions</label><textarea id="new-cron-content" style="flex:1;min-height:80px;background:#0f0f0f;border:1px solid #2a2a2a;border-radius:8px;color:#c9d1d9;font-family:'Courier New',monospace;font-size:12px;padding:8px;resize:vertical;outline:none" placeholder="What should Clawdy do when this fires?"></textarea></div>
+        <div style="display:flex;gap:8px">
+          <button onclick="addCron()">Create</button>
+          <button onclick="document.getElementById('add-cron-form').style.display='none'" style="background:#2a2a2a">Cancel</button>
+        </div>
+      </div>
     </div>
   </div>
 </div>
@@ -252,8 +277,9 @@ function switchTab(name) {
   document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
   document.getElementById('panel-'+name).classList.add('active');
   if (name === 'chat') setTimeout(()=>{ chatLog.scrollTop = chatLog.scrollHeight; }, 50);
+  if (name === 'terminal') setTimeout(()=>{ term.scrollTop = term.scrollHeight; }, 50);
   if (name === 'services') loadServices();
-  if (name === 'settings') loadSettings();
+  if (name === 'settings') { loadSettings(); loadCrons(); }
 }
 
 // SSE tmux stream
@@ -280,8 +306,15 @@ const es = new EventSource('/stream');
 es.addEventListener('terminal', (e) => {
   const d = JSON.parse(e.data);
   const atBottom = term.scrollHeight - term.scrollTop <= term.clientHeight + 60;
+  const prevScrollTop = term.scrollTop;
+  const prevHeight = term.scrollHeight;
   term.textContent = d.content;
-  if (atBottom) term.scrollTop = term.scrollHeight;
+  if (atBottom) {
+    term.scrollTop = term.scrollHeight;
+  } else {
+    // Preserve scroll position as content grows
+    term.scrollTop = prevScrollTop + (term.scrollHeight - prevHeight);
+  }
   document.getElementById('ts-label').textContent = new Date().toLocaleTimeString();
 });
 es.addEventListener('status', (e) => { applyStatus(JSON.parse(e.data)); });
@@ -303,6 +336,7 @@ const SRC_BADGES = {
   telegram:  'TG',
   dashboard: 'DASH',
   peer:      'PEER',
+  'peer-out':'PEER',
   cron:      'CRON',
   restart:   'SYS',
 };
@@ -322,43 +356,49 @@ function renderMarkdown(text) {
   return s;
 }
 
-function renderMsg(m, prepend=false) {
+function renderMsg(m) {
   const id = m.ts + '|' + m.dir + '|' + m.sender + '|' + (m.text||'').slice(0,20);
   if (_seenIds.has(id)) return;
   _seenIds.add(id);
 
   const src = m.source || '';
   const isUser = m.dir === 'in' && (src === 'telegram' || src === 'dashboard');
-  const isClawdy = m.dir === 'out';
+  const isPeerOut = src === 'peer-out';
+  const isClawdy = m.dir === 'out' && !isPeerOut;
   const d = new Date(m.ts * 1000);
   const ts = d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
 
-  // CSS classes for positioning + source color
   let wrapCls = 'bubble-wrap ';
-  if (isUser)       wrapCls += 'user';
-  else if (isClawdy) wrapCls += 'left clawdy';
-  else               wrapCls += 'left src-' + (src || 'system');
+  if (isUser)         wrapCls += 'user';
+  else if (isPeerOut) wrapCls += 'user src-peer-out';
+  else if (isClawdy)  wrapCls += 'left clawdy';
+  else                wrapCls += 'left src-' + (src || 'system');
 
   const wrap = document.createElement('div');
   wrap.className = wrapCls;
+  wrap.dataset.ts = m.ts;
 
   const badge = SRC_BADGES[src] ? '<span class="bubble-src">'+SRC_BADGES[src]+'</span>' : '';
   const sender = '<span class="bubble-sender">'+esc(m.sender)+'</span>';
-
-  const metaHtml = isUser
-    ? '<div class="bubble-meta">'+badge+sender+'</div>'
-    : '<div class="bubble-meta">'+badge+sender+'</div>';
-
-  wrap.innerHTML = metaHtml
+  wrap.innerHTML = '<div class="bubble-meta">'+badge+sender+'</div>'
     + '<div class="bubble">'+renderMarkdown(m.text||'')+'</div>'
     + '<div class="bubble-time">'+ts+'</div>';
 
-  const loadMoreBtn = document.getElementById('load-more');
-  if (prepend) {
-    chatLog.insertBefore(wrap, loadMoreBtn.nextSibling);
-  } else {
-    chatLog.appendChild(wrap);
+  // Insert in chronological order by scanning from the bottom
+  const bubbles = chatLog.querySelectorAll('.bubble-wrap[data-ts]');
+  let inserted = false;
+  for (let i = bubbles.length - 1; i >= 0; i--) {
+    if (m.ts >= parseFloat(bubbles[i].dataset.ts)) {
+      bubbles[i].after(wrap);
+      inserted = true;
+      break;
+    }
   }
+  if (!inserted) {
+    // Older than everything — insert after load-more button
+    document.getElementById('load-more').after(wrap);
+  }
+
   if (m.ts > _lastTs) _lastTs = m.ts;
   if (m.ts < _firstTs) _firstTs = m.ts;
 }
@@ -372,15 +412,24 @@ function loadHistory() {
   }).catch(()=>{});
 }
 
+let _loadingMore = false;
 function loadMore() {
+  if (_loadingMore) return;
+  _loadingMore = true;
   fetch('/api/chat-history?before='+_firstTs+'&limit=50').then(r=>r.json()).then(d=>{
     const msgs = (d.messages || []).reverse();
     const scrollBottom = chatLog.scrollHeight - chatLog.scrollTop;
-    msgs.forEach(m => renderMsg(m, true));
+    msgs.forEach(m => renderMsg(m));
     chatLog.scrollTop = chatLog.scrollHeight - scrollBottom;
     if ((d.messages||[]).length < 50) document.getElementById('load-more').style.display = 'none';
-  }).catch(()=>{});
+  }).catch(()=>{}).finally(()=>{ _loadingMore = false; });
 }
+
+chatLog.addEventListener('scroll', () => {
+  if (chatLog.scrollTop < 80 && document.getElementById('load-more').style.display !== 'none') {
+    loadMore();
+  }
+});
 
 loadHistory();
 
@@ -391,12 +440,17 @@ function sendChat() {
   if (!msg) return;
   inp.value = '';
   inp.style.height = '';
+  inp.focus();
   fetch('/chat', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({message:msg, sender:'Ben (Dashboard)'})})
     .catch(e=>console.error(e));
 }
 const chatIn = document.getElementById('chat-in');
 chatIn.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); }
+});
+// Re-focus chat input when clicking empty space (not bubbles, buttons, inputs, etc.)
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('button,a,input,select,textarea,.setting-row,.bubble-wrap,.bubble')) chatIn.focus();
 });
 chatIn.addEventListener('input', () => {
   chatIn.style.height = '';
@@ -444,6 +498,66 @@ function saveSettings() {
     });
 }
 loadSettings();
+
+// Cron management
+function loadCrons() {
+  fetch('/api/crons').then(r=>r.json()).then(d=>{
+    const list = document.getElementById('crons-list');
+    list.innerHTML = '';
+    (d.crons || []).forEach(c => {
+      const card = document.createElement('div');
+      card.className = 'cron-card';
+      card.dataset.name = c.name;
+      const isHeartbeat = c.name === 'HEARTBEAT';
+      card.innerHTML = `
+        <h4>${c.name} <span class="cron-badge">${c.description || c.schedule}</span>
+          ${isHeartbeat ? '' : `<button onclick="deleteCron('${c.name}')" style="margin-left:auto;background:#3a1a1a;color:#f66;font-size:11px;padding:2px 8px">Delete</button>`}
+        </h4>
+        <textarea id="cron-content-${c.name}">${esc(c.content)}</textarea>
+        <div class="cron-footer">
+          <input id="cron-sched-${c.name}" value="${c.schedule}" title="Cron schedule" />
+          <button onclick="saveCron('${c.name}')">Save</button>
+        </div>`;
+      list.appendChild(card);
+    });
+  }).catch(()=>{});
+}
+
+function saveCron(name) {
+  const content = document.getElementById('cron-content-'+name).value;
+  const schedule = document.getElementById('cron-sched-'+name).value;
+  fetch('/api/crons', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({name, content, schedule})
+  }).then(r=>r.json()).then(d => {
+    if (!d.ok) alert('Error: ' + d.error);
+  });
+}
+
+function deleteCron(name) {
+  if (!confirm('Delete cron ' + name + '?')) return;
+  fetch('/api/crons/delete/' + name, {method:'POST'}).then(r=>r.json()).then(d => {
+    if (d.ok) loadCrons(); else alert('Error: ' + d.error);
+  });
+}
+
+function showAddCron() {
+  document.getElementById('add-cron-form').style.display = '';
+}
+
+function addCron() {
+  const name = document.getElementById('new-cron-name').value.trim().toUpperCase().replace(/\s+/g,'_');
+  const schedule = document.getElementById('new-cron-schedule').value.trim();
+  const content = document.getElementById('new-cron-content').value.trim();
+  if (!name || !schedule || !content) { alert('Fill in all fields'); return; }
+  fetch('/api/crons/add', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({name, schedule, content})
+  }).then(r=>r.json()).then(d => {
+    if (d.ok) {
+      document.getElementById('add-cron-form').style.display = 'none';
+      loadCrons();
+    } else alert('Error: ' + d.error);
+  });
+}
 </script>
 </body>
 </html>"""
@@ -692,7 +806,10 @@ def enqueue_injection(text: str, sender: str, source: str = "telegram"):
     - other                → text injected as-is
     """
     ts = datetime.now().strftime("%Y-%m-%d %H:%M")
-    if source in ("telegram", "dashboard"):
+    # Slash commands bypass all prefix wrapping — sent as-is to the CLI
+    if text.startswith("/"):
+        display = text
+    elif source in ("telegram", "dashboard"):
         display = f"[TELEGRAM from {sender} | {ts}]: {text}"
     elif source == "cron":
         display = f"[CRON | {ts}] {text}"
@@ -772,6 +889,8 @@ class ClawdyHandler(BaseHTTPRequestHandler):
             self._serve_sse()
         elif self.path == "/api/services":
             self._serve_services()
+        elif self.path == "/api/crons":
+            self._serve_crons()
         elif self.path == "/api/settings":
             self._serve_settings()
         elif self.path == "/api/activity":
@@ -800,6 +919,12 @@ class ClawdyHandler(BaseHTTPRequestHandler):
             self._handle_chat(data)
         elif self.path == "/api/settings":
             self._update_settings(data)
+        elif self.path == "/api/crons":
+            self._update_cron(data)
+        elif self.path == "/api/crons/add":
+            self._add_cron(data)
+        elif re.match(r"^/api/crons/delete/[A-Z0-9_]+$", self.path):
+            self._delete_cron(self.path.split("/")[-1])
         elif re.match(r"^/api/restart/[a-zA-Z0-9\-\.@]+$", self.path):
             self._handle_restart()
         elif self.path == "/api/restart-context":
@@ -847,13 +972,18 @@ class ClawdyHandler(BaseHTTPRequestHandler):
         msg = data.get("message", "").strip()
         sender = data.get("sender", "Ben (Dashboard)")
         source = data.get("source", "dashboard")
+        direction = data.get("dir", "in")
         # Only allow known safe sources via this endpoint
-        if source not in ("dashboard", "restart", "cron"):
+        if source not in ("dashboard", "restart", "cron", "peer-out"):
             source = "dashboard"
         if not msg:
             self._json({"ok": False, "error": "empty"}, 400)
             return
-        enqueue_injection(msg, sender, source=source)
+        # Log-only sources (no tmux injection): restart, peer-out
+        if source in ("restart", "peer-out"):
+            log_chat_history(direction, sender, msg, source=source)
+        else:
+            enqueue_injection(msg, sender, source=source)  # enqueue_injection logs internally
         self._json({"ok": True, "queued": _inject_queue.qsize()})
 
     def _handle_restart_context(self, data):
@@ -963,7 +1093,19 @@ class ClawdyHandler(BaseHTTPRequestHandler):
 
         last_term = ""
         last_status = None
+        last_client_count = -1
+        # Start from latest known message so SSE only pushes truly new messages
         last_chat_ts = 0.0
+        try:
+            if CHAT_HISTORY.exists():
+                for line in CHAT_HISTORY.read_text().splitlines():
+                    if line.strip():
+                        try:
+                            last_chat_ts = max(last_chat_ts, json.loads(line).get("ts", 0))
+                        except Exception:
+                            pass
+        except Exception:
+            pass
         tick = 0
         try:
             # Send initial status immediately
@@ -972,9 +1114,9 @@ class ClawdyHandler(BaseHTTPRequestHandler):
             last_status = st
 
             while True:
-                # Terminal (every tick = 0.5s)
+                # Terminal (every tick = 0.5s) — capture last 500 lines of scrollback + visible pane
                 r = subprocess.run(
-                    ["tmux", "capture-pane", "-pt", f"{TMUX_SESSION}:{TMUX_WINDOW}"],
+                    ["tmux", "capture-pane", "-pt", f"{TMUX_SESSION}:{TMUX_WINDOW}", "-S", "-500"],
                     capture_output=True, text=True, timeout=5
                 )
                 raw = re.sub(r'\x1b\[[0-9;]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b[^[Oc]', '', r.stdout)
@@ -989,6 +1131,28 @@ class ClawdyHandler(BaseHTTPRequestHandler):
                     if st != last_status:
                         push("status", st)
                         last_status = st
+                    # Auto-resize based on attached clients
+                    try:
+                        cl = subprocess.run(
+                            ["tmux", "list-clients", "-t", f"{TMUX_SESSION}:{TMUX_WINDOW}"],
+                            capture_output=True, text=True, timeout=3
+                        )
+                        client_count = len([l for l in cl.stdout.splitlines() if l.strip()])
+                        if client_count == 0 and last_client_count != 0:
+                            # No clients — resize to dashboard-friendly fixed size
+                            subprocess.run(
+                                ["tmux", "resize-window", "-t", f"{TMUX_SESSION}:{TMUX_WINDOW}", "-x", "220", "-y", "50"],
+                                capture_output=True, timeout=3
+                            )
+                        elif client_count > 0 and last_client_count == 0:
+                            # Client just attached — let tmux auto-size to their terminal
+                            subprocess.run(
+                                ["tmux", "resize-window", "-A", "-t", f"{TMUX_SESSION}:{TMUX_WINDOW}"],
+                                capture_output=True, timeout=3
+                            )
+                        last_client_count = client_count
+                    except Exception:
+                        pass
 
                 # New chat messages (every 4 ticks = 2s)
                 if tick % 4 == 0 and CHAT_HISTORY.exists():
@@ -1047,6 +1211,103 @@ class ClawdyHandler(BaseHTTPRequestHandler):
             except Exception:
                 statuses.append({"name": svc, "active": False})
         self._json({"services": statuses})
+
+    def _crons_dir(self):
+        return Path.home() / ".easyclaw" / "workspace" / "crons"
+
+    def _crons_meta(self):
+        meta_file = self._crons_dir() / "crons.json"
+        try:
+            return json.loads(meta_file.read_text())
+        except Exception:
+            return []
+
+    def _save_crons_meta(self, meta):
+        meta_file = self._crons_dir() / "crons.json"
+        meta_file.write_text(json.dumps(meta, indent=2))
+
+    def _serve_crons(self):
+        crons_dir = self._crons_dir()
+        meta = self._crons_meta()
+        result = []
+        for entry in meta:
+            name = entry.get("name", "")
+            md_file = crons_dir / f"{name}.md"
+            content = md_file.read_text() if md_file.exists() else ""
+            result.append({
+                "name": name,
+                "schedule": entry.get("schedule", ""),
+                "enabled": entry.get("enabled", True),
+                "description": entry.get("description", ""),
+                "content": content,
+            })
+        self._json({"crons": result})
+
+    def _update_cron(self, data):
+        name = data.get("name", "").upper().replace(" ", "_")
+        if not name:
+            self._json({"ok": False, "error": "name required"}, 400); return
+        crons_dir = self._crons_dir()
+        meta = self._crons_meta()
+        entry = next((e for e in meta if e["name"] == name), None)
+        if not entry:
+            self._json({"ok": False, "error": "cron not found"}, 404); return
+        # Update content
+        if "content" in data:
+            (crons_dir / f"{name}.md").write_text(data["content"])
+        # Update schedule / enabled
+        if "schedule" in data:
+            entry["schedule"] = data["schedule"]
+            self._sync_crontab(name, entry["schedule"], entry.get("enabled", True))
+        if "enabled" in data:
+            entry["enabled"] = data["enabled"]
+            self._sync_crontab(name, entry["schedule"], entry["enabled"])
+        self._save_crons_meta(meta)
+        self._json({"ok": True})
+
+    def _add_cron(self, data):
+        name = data.get("name", "").upper().strip().replace(" ", "_")
+        schedule = data.get("schedule", "0 9 * * 1")
+        content = data.get("content", "")
+        description = data.get("description", "")
+        if not name:
+            self._json({"ok": False, "error": "name required"}, 400); return
+        crons_dir = self._crons_dir()
+        meta = self._crons_meta()
+        if any(e["name"] == name for e in meta):
+            self._json({"ok": False, "error": "cron already exists"}, 400); return
+        (crons_dir / f"{name}.md").write_text(content)
+        meta.append({"name": name, "schedule": schedule, "enabled": True, "description": description})
+        self._save_crons_meta(meta)
+        self._sync_crontab(name, schedule, True)
+        self._json({"ok": True})
+
+    def _delete_cron(self, name):
+        if name == "HEARTBEAT":
+            self._json({"ok": False, "error": "HEARTBEAT cannot be deleted"}); return
+        meta = self._crons_meta()
+        meta = [e for e in meta if e["name"] != name]
+        self._save_crons_meta(meta)
+        self._sync_crontab(name, "", False)  # remove from crontab
+        md_file = self._crons_dir() / f"{name}.md"
+        if md_file.exists():
+            md_file.unlink()
+        self._json({"ok": True})
+
+    def _sync_crontab(self, name, schedule, enabled):
+        """Add, update or remove a cron entry for the given cron name."""
+        runner = str(Path.home() / ".easyclaw" / "scripts" / "clawdy-cron-runner.sh")
+        log = str(Path.home() / ".easyclaw" / f"cron-{name.lower()}.log")
+        new_line = f"{schedule} {runner} {name} >> {log} 2>&1"
+        try:
+            r = subprocess.run(["crontab", "-l"], capture_output=True, text=True)
+            lines = [l for l in r.stdout.splitlines() if f"{runner} {name}" not in l]
+            if enabled and schedule:
+                lines.append(new_line)
+            subprocess.run(["crontab", "-"], input="\n".join(lines) + "\n", text=True)
+        except Exception as e:
+            import logging as _logging
+            _logging.getLogger(__name__).warning(f"crontab sync failed: {e}")
 
     def _serve_settings(self):
         # Expose non-secret env settings
@@ -1221,19 +1482,7 @@ def start_crash_monitor():
                 _restart_pending = None
 
             if not was_alive and is_alive:
-                # Claude just came back online — check for queued restart context file
-                resume_file = Path.home() / ".easyclaw" / "restart-resume"
-                if resume_file.exists():
-                    try:
-                        resume = resume_file.read_text().strip()
-                        resume_file.unlink(missing_ok=True)
-                        if resume:
-                            log.info(f"Injecting restart context: {resume[:60]}")
-                            # Small delay to let Claude Code fully init before injecting
-                            _time.sleep(5)
-                            enqueue_injection(resume, "system", source="restart")
-                    except Exception as e:
-                        log.warning(f"Failed to read restart-resume: {e}")
+                log.info("Claude came back online")
 
             was_alive = is_alive
             _time.sleep(5)
@@ -1293,6 +1542,15 @@ def main():
         ts_ip = "0.0.0.0"
 
     start_combined_server(bridge_key, dashboard_port, "0.0.0.0")
+
+    # Restore latest sizing so attached terminals work normally
+    try:
+        subprocess.run(
+            ["tmux", "set-option", "-t", f"{TMUX_SESSION}", "window-size", "latest"],
+            capture_output=True, timeout=3
+        )
+    except Exception:
+        pass
     log.info(f"Dashboard available at http://{ts_ip}:{dashboard_port}")
 
     # Main Telegram polling loop
