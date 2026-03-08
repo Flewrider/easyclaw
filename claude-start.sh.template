@@ -1,10 +1,10 @@
 #!/bin/bash
-export PATH="/home/ben/.local/bin:$PATH"
+export PATH="%%HOME%%/.local/bin:$PATH"
 
 SESSION="claude"
-WORKDIR="/home/ben"
-CLAUDE="/home/ben/.local/bin/claude"
-EASYCLAW="/home/ben/.easyclaw"
+WORKDIR="%%HOME%%"
+CLAUDE="%%HOME%%/.local/bin/claude"
+EASYCLAW="%%HOME%%/.easyclaw"
 RESTART_HISTORY="$EASYCLAW/restart-history"
 BRIDGE_PORT=$(grep "^BRIDGE_PORT=" "$EASYCLAW/.env" 2>/dev/null | cut -d= -f2)
 BRIDGE_PORT="${BRIDGE_PORT:-8765}"
