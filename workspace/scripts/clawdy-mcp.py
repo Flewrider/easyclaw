@@ -351,7 +351,7 @@ def impl_send_to_peer(message: str, sender: str = "SuperClawdy") -> str:
     if ok:
         # Log outgoing peer message to local dashboard
         try:
-            bridge_port = env.get("BRIDGE_PORT", "8765")
+            bridge_port = int(env.get("BRIDGE_PORT", "8765")) + 1  # local HTTP port (HTTPS port + 1)
             import requests as _req2
             _req2.post(
                 f"http://127.0.0.1:{bridge_port}/chat",

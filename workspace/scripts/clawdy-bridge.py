@@ -330,8 +330,16 @@ function applyStatus(d) {
 }
 
 // Single SSE stream pushes terminal, status, and new messages
-const es = new EventSource('/stream');
-es.addEventListener('terminal', (e) => {
+let es, _sseConnected = false;
+function connectSSE() {
+  if (es && _sseConnected) return;
+  if (es) { try { es.close(); } catch(_) {} }
+  _sseConnected = false;
+  // Warm up the Tailscale tunnel with a fast REST call first,
+  // then open SSE so it reuses the established connection
+  fetch('/api/status').catch(()=>{}).finally(() => {
+    es = new EventSource('/stream');
+  es.addEventListener('terminal', (e) => {
   const d = JSON.parse(e.data);
   const atBottom = term.scrollHeight - term.scrollTop <= term.clientHeight + 60;
   const prevScrollTop = term.scrollTop;
@@ -357,7 +365,16 @@ es.addEventListener('message', (e) => {
   msgs.forEach(m => renderMsg(m));
   if (atBottom) chatLog.scrollTop = chatLog.scrollHeight;
 });
-es.onerror = () => { statusText.textContent = 'stream error'; dot.className = 'dot unknown'; };
+    es.addEventListener('open', () => { _sseConnected = true; });
+    es.onerror = () => {
+      _sseConnected = false;
+      statusText.textContent = 'stream error'; dot.className = 'dot unknown';
+      es.close();
+      setTimeout(connectSSE, 3000);
+    };
+  });
+}
+connectSSE();
 
 // Chat history
 let _lastTs = 0;
@@ -442,13 +459,39 @@ function renderMsg(m) {
 }
 
 function loadHistory() {
-  fetch('/api/chat-history?limit=50').then(r=>r.json()).then(d=>{
+  // Show cached messages instantly while network loads
+  try {
+    const cached = JSON.parse(localStorage.getItem('clawdy_msgs') || '[]');
+    if (cached.length) {
+      cached.forEach(m => renderMsg(m));
+      chatLog.scrollTop = chatLog.scrollHeight;
+    }
+  } catch(_) {}
+  // Fetch fresh — update cache and fill any gaps
+  fetch('/api/chat-history?limit=10').then(r=>r.json()).then(d=>{
     const msgs = d.messages || [];
-    msgs.forEach(m => renderMsg(m));
+    if (!msgs.length) return;
+    try { localStorage.setItem('clawdy_msgs', JSON.stringify(msgs)); } catch(_) {}
+    msgs.forEach(m => renderMsg(m)); // renderMsg dedupes by _seenIds
     chatLog.scrollTop = chatLog.scrollHeight;
-    if (msgs.length >= 50) document.getElementById('load-more').style.display = '';
+    document.getElementById('load-more').style.display = msgs.length >= 10 ? '' : 'none';
   }).catch(()=>{});
 }
+
+function fetchMissed() {
+  if (_lastTs === 0) return;
+  fetch('/api/chat-history?since='+_lastTs+'&limit=100').then(r=>r.json()).then(d=>{
+    const msgs = d.messages || [];
+    if (!msgs.length) return;
+    const atBottom = chatLog.scrollHeight - chatLog.scrollTop <= chatLog.clientHeight + 80;
+    msgs.forEach(m => renderMsg(m));
+    if (atBottom) chatLog.scrollTop = chatLog.scrollHeight;
+  }).catch(()=>{});
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') { fetchMissed(); if (!_sseConnected) connectSSE(); }
+});
 
 let _loadingMore = false;
 function loadMore() {
@@ -1226,10 +1269,18 @@ class ClawdyHandler(BaseHTTPRequestHandler):
         self._json({"messages": messages, "has_more": False})
 
     def _serve_html(self):
+        import hashlib
         body = DASHBOARD_HTML.encode()
+        etag = hashlib.md5(body).hexdigest()[:16]
+        if self.headers.get("If-None-Match") == etag:
+            self.send_response(304)
+            self.end_headers()
+            return
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "max-age=3600, must-revalidate")
+        self.send_header("ETag", etag)
         self.end_headers()
         self.wfile.write(body)
 
@@ -1665,7 +1716,10 @@ def _get_env(key: str, default: str = "") -> str:
 
 
 def start_combined_server(api_key: str, port: int, host: str):
-    """Start the combined bridge + dashboard server on the given host:port."""
+    """Start the combined bridge + dashboard server on the given host:port.
+    If TLS certs exist, serves HTTPS externally and also a plain HTTP listener
+    on 127.0.0.1:(port+1) for local tools (MCP, cron scripts).
+    """
     server = ThreadingHTTPServer((host, port), ClawdyHandler)
     tls_cert = EASYCLAW / "tls.crt"
     tls_key  = EASYCLAW / "tls.key"
@@ -1675,6 +1729,13 @@ def start_combined_server(api_key: str, port: int, host: str):
         ctx.load_cert_chain(tls_cert, tls_key)
         server.socket = ctx.wrap_socket(server.socket, server_side=True)
         log.info(f"TLS enabled — serving HTTPS on {host}:{port}")
+        # Also start a plain HTTP listener on 0.0.0.0 for local tools + peer bots
+        # (Tailscale-gated; plain HTTP is fine since Tailscale encrypts the tunnel)
+        local_port = port + 1
+        local_server = ThreadingHTTPServer(("0.0.0.0", local_port), ClawdyHandler)
+        tl = threading.Thread(target=local_server.serve_forever, daemon=True, name="http-local")
+        tl.start()
+        log.info(f"Plain HTTP (no TLS) on 0.0.0.0:{local_port} (Tailscale-gated)")
     else:
         log.info(f"No TLS certs found — serving HTTP on {host}:{port}")
     t = threading.Thread(target=server.serve_forever, daemon=True, name="http-server")
