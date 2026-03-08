@@ -337,9 +337,7 @@ function connectSSE() {
   _sseConnected = false;
   // Warm up the Tailscale tunnel with a fast REST call first,
   // then open SSE so it reuses the established connection
-  fetch('/api/status').then(r=>r.json()).then(d=>{
-    if (d.identity) { document.getElementById('header-title').textContent = d.identity; document.title = d.identity; }
-  }).catch(()=>{}).finally(() => {
+  fetch('/api/status').catch(()=>{}).finally(() => {
     es = new EventSource('/stream');
   es.addEventListener('terminal', (e) => {
   const d = JSON.parse(e.data);
@@ -515,6 +513,11 @@ chatLog.addEventListener('scroll', () => {
 });
 
 loadHistory();
+
+// Update header title from identity file (runs unconditionally, separate from connectSSE)
+fetch('/api/status').then(r=>r.json()).then(d=>{
+  if (d.identity) { document.getElementById('header-title').textContent = d.identity; document.title = d.identity; }
+}).catch(()=>{});
 
 // Chat send
 const _optimisticTexts = new Map(); // text → expiry timestamp
@@ -1272,7 +1275,15 @@ class ClawdyHandler(BaseHTTPRequestHandler):
 
     def _serve_html(self):
         import hashlib
-        body = DASHBOARD_HTML.encode()
+        try:
+            identity = (Path.home() / ".easyclaw" / "identity").read_text().strip().splitlines()[0]
+        except Exception:
+            identity = "Clawdy"
+        html = DASHBOARD_HTML.replace(
+            '<h1 id="header-title">Clawdy</h1>',
+            f'<h1 id="header-title">{identity}</h1>',
+        ).replace('<title>Clawdy</title>', f'<title>{identity}</title>')
+        body = html.encode()
         etag = hashlib.md5(body).hexdigest()[:16]
         if self.headers.get("If-None-Match") == etag:
             self.send_response(304)
@@ -1281,7 +1292,7 @@ class ClawdyHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "max-age=3600, must-revalidate")
+        self.send_header("Cache-Control", "no-cache")
         self.send_header("ETag", etag)
         self.end_headers()
         self.wfile.write(body)
