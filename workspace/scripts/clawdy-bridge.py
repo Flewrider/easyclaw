@@ -194,7 +194,7 @@ body{background:#0f0f0f;color:#e8e8e8;font-family:-apple-system,'Segoe UI',syste
 <body>
 <div id="app">
   <div id="header">
-    <h1>Clawdy</h1>
+    <h1 id="header-title">Clawdy</h1>
     <div class="dot unknown" id="dot"></div>
     <span id="status-text">connecting</span>
     <span id="queue-badge"></span>
@@ -569,7 +569,10 @@ function loadSettings() {
     const s = d.settings || {};
     if (s.claude_model) document.getElementById('cfg-model').value = s.claude_model;
     if (s.claude_effort) document.getElementById('cfg-effort').value = s.claude_effort;
-    document.getElementById('cfg-name').value = s.BOT_NAME || 'Clawdy';
+    const botName = s.BOT_NAME || 'Clawdy';
+    document.getElementById('cfg-name').value = botName;
+    document.getElementById('header-title').textContent = botName;
+    document.title = botName;
   }).catch(()=>{});
 }
 function saveSettings() {

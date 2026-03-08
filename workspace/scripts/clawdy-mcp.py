@@ -365,39 +365,11 @@ def impl_send_to_peer(message: str, sender: str = "SuperClawdy") -> str:
         return f"Sent to peer: {message[:80]}"
 
     # First attempt failed — retry in background so MCP isn't blocked for 30s
-    def _notify_failure(err_msg: str):
-        """Notify Ben via Telegram AND inject a system alert into the local bridge."""
-        alert = f"⚠️ Peer message failed after retry:\n\"{message[:80]}\"\n{err_msg}"
-        impl_telegram_send(alert)
-        # Also post to local bridge chat so dashboard shows it and bot sees it in next context
-        try:
-            bridge_port = int(env.get("BRIDGE_PORT", "8765")) + 1
-            import requests as _rq
-            _rq.post(
-                f"http://127.0.0.1:{bridge_port}/chat",
-                json={"message": alert, "sender": "system", "source": "system", "dir": "in"},
-                timeout=3,
-            )
-        except Exception:
-            pass
-
     def _retry():
         _time.sleep(30)
         ok2, err2 = _attempt()
-        if ok2:
-            # Retry succeeded — log outgoing to dashboard
-            try:
-                bridge_port = int(env.get("BRIDGE_PORT", "8765")) + 1
-                import requests as _rq2
-                _rq2.post(
-                    f"http://127.0.0.1:{bridge_port}/chat",
-                    json={"message": message, "sender": "SuperClawdy", "source": "peer-out", "dir": "out"},
-                    timeout=3,
-                )
-            except Exception:
-                pass
-        else:
-            _notify_failure(err2)
+        if not ok2:
+            impl_telegram_send(f"⚠️ Peer message failed after retry:\n\"{message[:80]}\"\n{err2}")
 
     _threading.Thread(target=_retry, daemon=True).start()
     return f"Sent to peer (retry pending): {message[:80]}"
