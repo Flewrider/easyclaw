@@ -234,14 +234,8 @@ def impl_memory_list(days: int = 7) -> str:
     return "\n".join(lines)
 
 
-def impl_telegram_send(message: str, end_typing: bool = False, chat_id: int | str | None = None) -> str:
+def impl_telegram_send(message: str, chat_id: int | str | None = None) -> str:
     import requests  # local import — only needed if telegram is used
-
-    # Signal telegram-bot.py to stop the typing thread ONLY when caller
-    # explicitly says this is the final message.  Touching the flag on every
-    # send killed the indicator during multi-part replies.
-    if end_typing:
-        STOP_TYPING.touch()
 
     env = load_env()
     token = env.get("TELEGRAM_BOT_TOKEN", "")
@@ -285,7 +279,7 @@ def impl_telegram_send(message: str, end_typing: bool = False, chat_id: int | st
         pass
 
     sent_info = f"{len(message)} chars" if len(chunks) == 1 else f"{len(message)} chars in {len(chunks)} parts"
-    return f"Sent ({sent_info}). Typing indicator: {'stopped' if end_typing else 'still running'}."
+    return f"Sent ({sent_info})."
 
 
 def impl_telegram_send_file(file_path: str, caption: str | None = None) -> str:
@@ -907,23 +901,11 @@ async def list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="telegram_send",
-            description=(
-                "Send a message to the user via Telegram. The typing indicator keeps "
-                "running by default so the user knows you're still working. "
-                "IMPORTANT: Only set end_typing=true on the absolute LAST telegram_send "
-                "call when ALL work is completely finished — no more messages to send, "
-                "no more processing to do. If you still have follow-up messages, tool "
-                "calls, or any remaining work, do NOT set end_typing=true yet."
-            ),
+            description="Send a message to the user via Telegram. Typing indicator is managed automatically by the bridge.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "message": {"type": "string", "description": "Message text (Markdown supported)"},
-                    "end_typing": {
-                        "type": "boolean",
-                        "description": "Stop the typing indicator after sending (use on final message)",
-                        "default": False,
-                    },
                     "chat_id": {
                         "type": "integer",
                         "description": "Optional chat ID to send to. Defaults to the configured owner chat. Use for group chats or other authorized chats.",
@@ -1213,7 +1195,6 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextCont
         elif name == "telegram_send":
             result = impl_telegram_send(
                 arguments["message"],
-                bool(arguments.get("end_typing", False)),
                 arguments.get("chat_id"),
             )
         elif name == "telegram_send_file":

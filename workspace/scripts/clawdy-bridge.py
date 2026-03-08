@@ -43,6 +43,7 @@ _inject_queue = _queue_module.Queue()
 _typing_thread: threading.Thread | None = None
 _stop_typing_event = threading.Event()
 _bot_token: str = ""
+_tg_owner_chat_id: int = 0
 TMUX_SESSION = "claude"
 TMUX_WINDOW = "claude"
 FILE_SIZE_LIMIT = 20 * 1024 * 1024  # 20 MB
@@ -69,7 +70,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Clawdy</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -139,8 +140,16 @@ body{background:#0f0f0f;color:#e8e8e8;font-family:-apple-system,'Segoe UI',syste
 .bubble-wrap.user .bubble-sender{color:rgba(255,255,255,.7)}
 
 /* Chat input */
-#chat-input-row{display:flex;padding:10px 12px;gap:8px;border-top:1px solid #2a2a2a;background:#1a1a1a;align-items:flex-end}
-#chat-in{flex:1;background:#2a2a2a;border:1px solid #3a3a3a;border-radius:20px;padding:8px 14px;color:#e8e8e8;font-size:14px;outline:none;resize:none;max-height:120px;font-family:inherit;line-height:1.4}
+#chat-input-row{display:flex;padding:10px 12px;gap:8px;border-top:1px solid #2a2a2a;background:#1a1a1a;align-items:flex-end;padding-bottom:calc(10px + env(safe-area-inset-bottom))}
+#ptt-btn{background:#1e1e1e;border:1px solid #333;border-radius:10px;color:#888;font-size:16px;padding:6px 10px;cursor:pointer;flex-shrink:0;transition:background .15s,color .15s,border-color .15s;user-select:none;-webkit-user-select:none;touch-action:none}
+#typing-bubble{display:none;align-items:center;gap:5px;padding:4px 10px 10px 14px}
+#typing-bubble .tdot{width:7px;height:7px;border-radius:50%;background:#555;animation:tdot-bounce 1.2s ease-in-out infinite}
+#typing-bubble .tdot:nth-child(2){animation-delay:.2s}
+#typing-bubble .tdot:nth-child(3){animation-delay:.4s}
+@keyframes tdot-bounce{0%,80%,100%{transform:translateY(0);background:#555}40%{transform:translateY(-6px);background:#888}}
+#ptt-btn.recording{background:#3d1010;border-color:#c0392b;color:#e74c3c;animation:ptt-pulse 1s ease-in-out infinite}
+@keyframes ptt-pulse{0%,100%{box-shadow:0 0 0 0 rgba(231,76,60,.4)}50%{box-shadow:0 0 0 6px rgba(231,76,60,0)}}
+#chat-in{flex:1;background:#2a2a2a;border:1px solid #3a3a3a;border-radius:20px;padding:8px 14px;color:#e8e8e8;font-size:16px;outline:none;resize:none;max-height:120px;font-family:inherit;line-height:1.4}
 #chat-in:focus{border-color:#007aff}
 #chat-btn{background:#007aff;border:none;border-radius:50%;width:36px;height:36px;color:#fff;font-size:18px;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:background .2s}
 #chat-btn:hover{background:#0066d6}
@@ -167,7 +176,7 @@ body{background:#0f0f0f;color:#e8e8e8;font-family:-apple-system,'Segoe UI',syste
 #settings-panel{flex:1;overflow-y:auto;padding:16px}
 .setting-row{display:flex;align-items:center;gap:10px;margin-bottom:12px;font-size:13px}
 .setting-row label{width:120px;color:#888;flex-shrink:0}
-.setting-row input,.setting-row select{flex:1;background:#2a2a2a;border:1px solid #3a3a3a;border-radius:8px;padding:7px 10px;color:#e8e8e8;font-size:13px;outline:none}
+.setting-row input,.setting-row select{flex:1;background:#2a2a2a;border:1px solid #3a3a3a;border-radius:8px;padding:7px 10px;color:#e8e8e8;font-size:16px;outline:none}
 .setting-row input:focus,.setting-row select:focus{border-color:#007aff}
 .cron-card{background:#1a1a1a;border:1px solid #2a2a2a;border-radius:12px;padding:14px;margin-bottom:14px}
 .cron-card h4{margin:0 0 10px;font-size:13px;color:#e8e8e8;display:flex;align-items:center;gap:8px}
@@ -203,8 +212,10 @@ body{background:#0f0f0f;color:#e8e8e8;font-family:-apple-system,'Segoe UI',syste
     <div id="chat-log">
       <button id="load-more" onclick="loadMore()">&#8593; Load earlier</button>
     </div>
+    <div id="typing-bubble"><div class="tdot"></div><div class="tdot"></div><div class="tdot"></div></div>
     <div id="chat-input-row">
-      <textarea id="chat-in" rows="1" placeholder="Message Claude..." autofocus></textarea>
+      <button id="ptt-btn" title="Hold to talk (or hold Space when not typing)" onmousedown="pttStart(event)" onmouseup="pttStop(event)" ontouchstart="pttStart(event)" ontouchend="pttStop(event)">&#127908;</button>
+      <textarea id="chat-in" rows="1" placeholder="Message Claude..."></textarea>
       <button id="chat-btn" onclick="sendChat()">&#9650;</button>
     </div>
   </div>
@@ -244,7 +255,24 @@ body{background:#0f0f0f;color:#e8e8e8;font-family:-apple-system,'Segoe UI',syste
       </div>
       <button id="save-settings" onclick="saveSettings()">Save &amp; apply</button>
       <p style="margin-top:10px;font-size:11px;color:#555">Model + Effort changes take effect after Clawdy restart.</p>
-      <div class="cron-section-title">Cron Jobs</div>
+      <div class="cron-section-title" style="margin-top:22px">Secrets</div>
+      <p style="font-size:11px;color:#555;margin:4px 0 10px">Values are write-only — existing keys show as set. Leave blank to keep current value.</p>
+      <div class="setting-row">
+        <label>Telegram Bot Token</label>
+        <div style="display:flex;align-items:center;gap:8px;flex:1">
+          <input id="sec-telegram" type="password" placeholder="Enter new value…" style="flex:1" />
+          <span id="sec-telegram-status" style="font-size:11px;color:#555;white-space:nowrap"></span>
+        </div>
+      </div>
+      <div class="setting-row">
+        <label>Groq API Key</label>
+        <div style="display:flex;align-items:center;gap:8px;flex:1">
+          <input id="sec-groq" type="password" placeholder="Enter new value…" style="flex:1" />
+          <span id="sec-groq-status" style="font-size:11px;color:#555;white-space:nowrap"></span>
+        </div>
+      </div>
+      <button onclick="saveSecrets()" style="margin-top:6px">Save secrets</button>
+      <div class="cron-section-title" style="margin-top:22px">Cron Jobs</div>
       <div id="crons-list"></div>
       <button onclick="showAddCron()" style="margin-top:4px;font-size:11px;padding:4px 10px;width:auto">+ Add Cron</button>
       <div id="add-cron-form" style="display:none;margin-top:14px" class="cron-card">
@@ -279,7 +307,7 @@ function switchTab(name) {
   if (name === 'chat') setTimeout(()=>{ chatLog.scrollTop = chatLog.scrollHeight; }, 50);
   if (name === 'terminal') setTimeout(()=>{ term.scrollTop = term.scrollHeight; }, 50);
   if (name === 'services') loadServices();
-  if (name === 'settings') { loadSettings(); loadCrons(); }
+  if (name === 'settings') { loadSettings(); loadCrons(); loadSecrets(); }
 }
 
 // SSE tmux stream
@@ -318,6 +346,11 @@ es.addEventListener('terminal', (e) => {
   document.getElementById('ts-label').textContent = new Date().toLocaleTimeString();
 });
 es.addEventListener('status', (e) => { applyStatus(JSON.parse(e.data)); });
+es.addEventListener('typing', (e) => {
+  const d = JSON.parse(e.data);
+  document.getElementById('typing-bubble').style.display = d.active ? 'flex' : 'none';
+  if (d.active && _activeTab === 'chat') chatLog.scrollTop = chatLog.scrollHeight;
+});
 es.addEventListener('message', (e) => {
   const msgs = JSON.parse(e.data);
   const atBottom = chatLog.scrollHeight - chatLog.scrollTop <= chatLog.clientHeight + 80;
@@ -360,6 +393,11 @@ function renderMsg(m) {
   const id = m.ts + '|' + m.dir + '|' + m.sender + '|' + (m.text||'').slice(0,20);
   if (_seenIds.has(id)) return;
   _seenIds.add(id);
+  // Suppress SSE echo of optimistically-rendered dashboard messages
+  if (m.source === 'dashboard' && m.dir === 'in') {
+    const expiry = _optimisticTexts.get(m.text||'');
+    if (expiry && Date.now() / 1000 < expiry) { _optimisticTexts.delete(m.text||''); return; }
+  }
 
   const src = m.source || '';
   const isUser = m.dir === 'in' && (src === 'telegram' || src === 'dashboard');
@@ -434,23 +472,29 @@ chatLog.addEventListener('scroll', () => {
 loadHistory();
 
 // Chat send
+const _optimisticTexts = new Map(); // text → expiry timestamp
 function sendChat() {
   const inp = document.getElementById('chat-in');
   const msg = inp.value.trim();
   if (!msg) return;
   inp.value = '';
   inp.style.height = '';
-  inp.focus();
+  // Optimistic render — show immediately
+  const now = Date.now() / 1000;
+  _optimisticTexts.set(msg, now + 10); // suppress SSE duplicate for 10s
+  renderMsg({ts: now, dir: 'in', source: 'dashboard', sender: 'Ben (Dashboard)', text: msg});
+  chatLog.scrollTop = chatLog.scrollHeight;
   fetch('/chat', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({message:msg, sender:'Ben (Dashboard)'})})
     .catch(e=>console.error(e));
 }
 const chatIn = document.getElementById('chat-in');
 chatIn.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); }
+  if (e.key === 'Escape') { e.preventDefault(); chatIn.blur(); }
 });
 // Re-focus chat input when clicking empty space (not bubbles, buttons, inputs, etc.)
 document.addEventListener('click', (e) => {
-  if (!e.target.closest('button,a,input,select,textarea,.setting-row,.bubble-wrap,.bubble')) chatIn.focus();
+  if (!e.target.closest('button,a,input,select,textarea,.setting-row,.bubble-wrap,.bubble,.tab')) chatIn.focus();
 });
 chatIn.addEventListener('input', () => {
   chatIn.style.height = '';
@@ -498,6 +542,33 @@ function saveSettings() {
     });
 }
 loadSettings();
+
+function loadSecrets() {
+  fetch('/api/secrets').then(r=>r.json()).then(d=>{
+    const s = d.secrets || {};
+    document.getElementById('sec-telegram-status').textContent = s.TELEGRAM_BOT_TOKEN ? '✓ set' : 'not set';
+    document.getElementById('sec-telegram-status').style.color = s.TELEGRAM_BOT_TOKEN ? '#3fb950' : '#555';
+    document.getElementById('sec-groq-status').textContent = s.GROQ_API_KEY ? '✓ set' : 'not set';
+    document.getElementById('sec-groq-status').style.color = s.GROQ_API_KEY ? '#3fb950' : '#555';
+  }).catch(()=>{});
+}
+function saveSecrets() {
+  const data = {};
+  const tg = document.getElementById('sec-telegram').value.trim();
+  const groq = document.getElementById('sec-groq').value.trim();
+  if (tg) data.TELEGRAM_BOT_TOKEN = tg;
+  if (groq) data.GROQ_API_KEY = groq;
+  if (!Object.keys(data).length) { alert('No values entered.'); return; }
+  fetch('/api/secrets', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)})
+    .then(r=>r.json()).then(d=>{
+      if (d.ok) {
+        document.getElementById('sec-telegram').value = '';
+        document.getElementById('sec-groq').value = '';
+        loadSecrets();
+        alert('Secrets saved! Restart Clawdy for changes to take effect.');
+      } else alert('Error: ' + d.error);
+    });
+}
 
 // Cron management
 function loadCrons() {
@@ -558,6 +629,77 @@ function addCron() {
     } else alert('Error: ' + d.error);
   });
 }
+
+// ── Push-to-talk ──────────────────────────────────────────────────────────────
+let _pttRecorder = null, _pttChunks = [], _pttStream = null;
+
+async function pttStart(e) {
+  e.preventDefault();
+  if (_pttRecorder) return;
+  try {
+    _pttStream = await navigator.mediaDevices.getUserMedia({audio: true});
+    const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : 'audio/webm';
+    _pttRecorder = new MediaRecorder(_pttStream, {mimeType});
+    _pttChunks = [];
+    _pttRecorder.ondataavailable = e => { if (e.data.size > 0) _pttChunks.push(e.data); };
+    _pttRecorder.start();
+    document.getElementById('ptt-btn').classList.add('recording');
+  } catch(err) {
+    alert('Mic access denied: ' + err.message);
+  }
+}
+
+async function pttStop(e) {
+  e.preventDefault();
+  if (!_pttRecorder) return;
+  const recorder = _pttRecorder;
+  _pttRecorder = null;
+  await new Promise(resolve => { recorder.onstop = resolve; recorder.stop(); });
+  _pttStream.getTracks().forEach(t => t.stop());
+  _pttStream = null;
+  document.getElementById('ptt-btn').classList.remove('recording');
+  const blob = new Blob(_pttChunks, {type: recorder.mimeType});
+  if (blob.size < 1000) return; // too short, ignore
+  const input = document.getElementById('chat-in');
+  const existing = input.value.trim();
+  input.value = existing ? existing + ' …' : '…transcribing…';
+  try {
+    const resp = await fetch('/api/transcribe', {
+      method: 'POST',
+      headers: {'Content-Type': recorder.mimeType},
+      body: blob
+    });
+    const d = await resp.json();
+    if (d.ok && d.text) {
+      input.value = existing ? existing + ' ' + d.text : d.text;
+      input.focus();
+      input.dispatchEvent(new Event('input'));
+    } else {
+      input.value = existing;
+      alert('Transcription failed: ' + (d.error || 'unknown error'));
+    }
+  } catch(err) {
+    input.value = existing;
+    alert('Transcription error: ' + err.message);
+  }
+}
+
+// ── PTT keyboard shortcut (hold Space when no input is focused) ───────────────
+let _pttKeyDown = false;
+document.addEventListener('keydown', e => {
+  if (e.code !== 'Space') return;
+  const tag = document.activeElement?.tagName;
+  if (tag === 'TEXTAREA' || tag === 'INPUT') return;
+  e.preventDefault();
+  if (_pttKeyDown) return;
+  _pttKeyDown = true;
+  pttStart(e);
+});
+document.addEventListener('keyup', e => {
+  if (e.code !== 'Space' || !_pttKeyDown) return;
+  _pttKeyDown = false;
+  pttStop(e);
+});
 </script>
 </body>
 </html>"""
@@ -579,13 +721,31 @@ def get_whisper_model():
 
 
 def transcribe_voice(file_path: Path) -> str | None:
+    groq_key = _get_env("GROQ_API_KEY", "")
+    if groq_key:
+        try:
+            from groq import Groq
+            client = Groq(api_key=groq_key)
+            with open(file_path, "rb") as f:
+                result = client.audio.transcriptions.create(
+                    file=(file_path.name, f, "audio/ogg"),
+                    model="whisper-large-v3-turbo",
+                    response_format="text",
+                )
+            text = result.strip() if isinstance(result, str) else (result.text or "").strip()
+            log.info(f"Groq transcribed: {text[:80]!r}")
+            if text:
+                return text
+        except Exception as e:
+            log.warning(f"Groq transcription failed, falling back to local: {e}")
+    # Local faster-whisper fallback
     model = get_whisper_model()
     if model is None:
         return None
     try:
         segments, info = model.transcribe(str(file_path), beam_size=5, vad_filter=True)
         text = " ".join(seg.text.strip() for seg in segments).strip()
-        log.info(f"Transcribed ({info.language}, {info.duration:.1f}s): {text[:80]!r}")
+        log.info(f"Transcribed locally ({info.language}, {info.duration:.1f}s): {text[:80]!r}")
         if not text and info.language_probability < 0.7:
             segments, info = model.transcribe(str(file_path), beam_size=5, vad_filter=True, language="de")
             text = " ".join(seg.text.strip() for seg in segments).strip()
@@ -893,6 +1053,8 @@ class ClawdyHandler(BaseHTTPRequestHandler):
             self._serve_crons()
         elif self.path == "/api/settings":
             self._serve_settings()
+        elif self.path == "/api/secrets":
+            self._serve_secrets()
         elif self.path == "/api/activity":
             self._serve_activity()
         elif self.path == "/api/status":
@@ -906,6 +1068,11 @@ class ClawdyHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(length)
+
+        if self.path == "/api/transcribe":
+            self._handle_transcribe(body)
+            return
+
         try:
             data = json.loads(body) if body else {}
         except Exception:
@@ -919,6 +1086,8 @@ class ClawdyHandler(BaseHTTPRequestHandler):
             self._handle_chat(data)
         elif self.path == "/api/settings":
             self._update_settings(data)
+        elif self.path == "/api/secrets":
+            self._update_secrets(data)
         elif self.path == "/api/crons":
             self._update_cron(data)
         elif self.path == "/api/crons/add":
@@ -1094,6 +1263,7 @@ class ClawdyHandler(BaseHTTPRequestHandler):
         last_term = ""
         last_status = None
         last_client_count = -1
+        last_typing = False
         # Start from latest known message so SSE only pushes truly new messages
         last_chat_ts = 0.0
         try:
@@ -1124,6 +1294,27 @@ class ClawdyHandler(BaseHTTPRequestHandler):
                 if term_content != last_term:
                     push("terminal", {"content": term_content})
                     last_term = term_content
+                # Detect if Claude is actively working — "esc to interrupt" only appears in
+                # the status bar when Claude is processing (not shown when idle)
+                # Use visible pane only (no -S flag) to avoid scrollback false positives
+                try:
+                    visible_r = subprocess.run(
+                        ["tmux", "capture-pane", "-pt", f"{TMUX_SESSION}:{TMUX_WINDOW}"],
+                        capture_output=True, text=True, timeout=3
+                    )
+                    visible = re.sub(r'\x1b\[[0-9;]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b[^[Oc]', '', visible_r.stdout)
+                    last3 = "\n".join(visible.splitlines()[-3:])
+                    is_typing = bool(re.search(r'esc to interrupt', last3, re.IGNORECASE))
+                except Exception:
+                    is_typing = False
+                if is_typing != last_typing:
+                    push("typing", {"active": is_typing})
+                    last_typing = is_typing
+                    if _tg_owner_chat_id:
+                        if is_typing:
+                            start_typing(_tg_owner_chat_id)
+                        else:
+                            stop_typing()
 
                 # Status (every 6 ticks = 3s)
                 if tick % 6 == 0:
@@ -1311,7 +1502,7 @@ class ClawdyHandler(BaseHTTPRequestHandler):
 
     def _serve_settings(self):
         # Expose non-secret env settings
-        hidden = {"TELEGRAM_BOT_TOKEN", "BRIDGE_API_KEY"}
+        hidden = {"TELEGRAM_BOT_TOKEN", "BRIDGE_API_KEY", "GROQ_API_KEY"}
         settings = {}
         try:
             for line in ENV_FILE.read_text().splitlines():
@@ -1332,6 +1523,61 @@ class ClawdyHandler(BaseHTTPRequestHandler):
         except Exception:
             pass
         self._json({"settings": settings})
+
+    def _serve_secrets(self):
+        """Return which secret keys are set (boolean only, never the values)."""
+        secret_keys = ["TELEGRAM_BOT_TOKEN", "BRIDGE_API_KEY", "GROQ_API_KEY"]
+        result = {}
+        try:
+            env_text = ENV_FILE.read_text()
+            for k in secret_keys:
+                match = re.search(f"^{k}=(.+)$", env_text, re.MULTILINE)
+                result[k] = bool(match and match.group(1).strip())
+        except Exception:
+            result = {k: False for k in secret_keys}
+        self._json({"secrets": result})
+
+    def _update_secrets(self, data):
+        """Write secret keys to .env (only if non-empty value provided)."""
+        secret_keys = {"TELEGRAM_BOT_TOKEN", "BRIDGE_API_KEY", "GROQ_API_KEY"}
+        updated = []
+        try:
+            env_text = ENV_FILE.read_text()
+            for k, v in data.items():
+                if k not in secret_keys or not v.strip():
+                    continue
+                if re.search(f"^{k}=", env_text, re.MULTILINE):
+                    env_text = re.sub(f"^{k}=.*$", f"{k}={v.strip()}", env_text, flags=re.MULTILINE)
+                else:
+                    env_text += f"\n{k}={v.strip()}"
+                updated.append(k)
+            ENV_FILE.write_text(env_text)
+        except Exception as e:
+            self._json({"ok": False, "error": str(e)}, 500)
+            return
+        self._json({"ok": True, "updated": updated})
+
+    def _handle_transcribe(self, body: bytes):
+        """Receive raw audio bytes from dashboard, transcribe, return text."""
+        if not body:
+            self._json({"ok": False, "error": "No audio data"}, 400)
+            return
+        import tempfile
+        content_type = self.headers.get("Content-Type", "audio/webm")
+        ext = ".ogg" if "ogg" in content_type else ".webm"
+        try:
+            with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
+                tmp.write(body)
+                tmp_path = Path(tmp.name)
+            text = transcribe_voice(tmp_path)
+            tmp_path.unlink(missing_ok=True)
+            if text:
+                self._json({"ok": True, "text": text})
+            else:
+                self._json({"ok": False, "error": "Could not transcribe audio"})
+        except Exception as e:
+            log.error(f"Transcribe endpoint error: {e}")
+            self._json({"ok": False, "error": str(e)}, 500)
 
     def _update_settings(self, data):
         updated = []
@@ -1421,6 +1667,16 @@ def _get_env(key: str, default: str = "") -> str:
 def start_combined_server(api_key: str, port: int, host: str):
     """Start the combined bridge + dashboard server on the given host:port."""
     server = ThreadingHTTPServer((host, port), ClawdyHandler)
+    tls_cert = EASYCLAW / "tls.crt"
+    tls_key  = EASYCLAW / "tls.key"
+    if tls_cert.exists() and tls_key.exists():
+        import ssl
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.load_cert_chain(tls_cert, tls_key)
+        server.socket = ctx.wrap_socket(server.socket, server_side=True)
+        log.info(f"TLS enabled — serving HTTPS on {host}:{port}")
+    else:
+        log.info(f"No TLS certs found — serving HTTP on {host}:{port}")
     t = threading.Thread(target=server.serve_forever, daemon=True, name="http-server")
     t.start()
     log.info(f"Bridge + dashboard server on {host}:{port}")
@@ -1522,6 +1778,9 @@ def main():
         log.error(f"Bot token invalid: {me}")
         sys.exit(1)
     log.info(f"Bot @{me['result']['username']} connected. Allowed: {cfg['allowed_chats']}")
+    global _tg_owner_chat_id
+    if cfg["allowed_chats"]:
+        _tg_owner_chat_id = cfg["allowed_chats"][0]
 
     # Reload any messages queued before last bridge restart
     load_pending_queue()
@@ -1666,7 +1925,6 @@ def main():
             combined = "\n\n".join(batch["texts"])
             if len(batch["texts"]) > 1:
                 log.info(f"Combining {len(batch['texts'])} parts for chat {chat_id}")
-            start_typing(chat_id)
             enqueue_injection(combined, batch["sender"], source="telegram")
 
 
