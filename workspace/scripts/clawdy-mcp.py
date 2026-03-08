@@ -316,7 +316,15 @@ def impl_telegram_send_file(file_path: str, caption: str | None = None) -> str:
         return f"Error sending file: {e}"
 
 
-def impl_send_to_peer(message: str, sender: str = "SuperClawdy") -> str:
+def _read_identity() -> str:
+    """Read bot name from ~/.easyclaw/identity (single line, e.g. 'SuperClawdy')."""
+    try:
+        return (Path.home() / ".easyclaw" / "identity").read_text().strip().splitlines()[0]
+    except Exception:
+        return "Clawdy"
+
+
+def impl_send_to_peer(message: str, sender: str = "") -> str:
     """POST a message to the peer bot's bridge /inject endpoint over Tailscale.
 
     HTTP 200 = bridge confirmed receipt and tmux inject succeeded = delivered.
@@ -326,6 +334,8 @@ def impl_send_to_peer(message: str, sender: str = "SuperClawdy") -> str:
     import threading as _threading
     import time as _time
     import requests as _req
+    if not sender:
+        sender = _read_identity()
     env = load_env()
     peer_url = env.get("PEER_BRIDGE_URL", "").rstrip("/")
     api_key = env.get("BRIDGE_API_KEY", "")
@@ -357,7 +367,7 @@ def impl_send_to_peer(message: str, sender: str = "SuperClawdy") -> str:
             import requests as _req2
             _req2.post(
                 f"http://127.0.0.1:{bridge_port}/chat",
-                json={"message": message, "sender": "SuperClawdy", "source": "peer-out", "dir": "out"},
+                json={"message": message, "sender": sender, "source": "peer-out", "dir": "out"},
                 timeout=3,
             )
         except Exception:
@@ -1205,7 +1215,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextCont
             )
         elif name == "send_to_peer":
             result = impl_send_to_peer(
-                arguments["message"], arguments.get("sender", "SuperClawdy")
+                arguments["message"], arguments.get("sender", "")
             )
         elif name == "activity_log":
             result = impl_activity_log(arguments["category"], arguments["description"])
