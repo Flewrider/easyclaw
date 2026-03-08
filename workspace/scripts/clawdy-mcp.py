@@ -379,7 +379,20 @@ def impl_send_to_peer(message: str, sender: str = "") -> str:
         _time.sleep(30)
         ok2, err2 = _attempt()
         if not ok2:
-            impl_telegram_send(f"⚠️ Peer message failed after retry:\n\"{message[:80]}\"\n{err2}")
+            alert = f"⚠️ Peer message failed after retry:\n\"{message[:80]}\"\n{err2}"
+            impl_telegram_send(alert)
+            # Also inject into local tmux so the bot sees it in context
+            try:
+                bridge_port = int(env.get("BRIDGE_PORT", "8765")) + 1
+                import requests as _rq
+                _rq.post(
+                    f"http://127.0.0.1:{bridge_port}/inject",
+                    json={"message": alert, "sender": "system", "source": "system"},
+                    headers={"X-API-Key": env.get("BRIDGE_API_KEY", "")},
+                    timeout=3,
+                )
+            except Exception:
+                pass
 
     _threading.Thread(target=_retry, daemon=True).start()
     return f"Sent to peer (retry pending): {message[:80]}"
