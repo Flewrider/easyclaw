@@ -337,7 +337,9 @@ function connectSSE() {
   _sseConnected = false;
   // Warm up the Tailscale tunnel with a fast REST call first,
   // then open SSE so it reuses the established connection
-  fetch('/api/status').catch(()=>{}).finally(() => {
+  fetch('/api/status').then(r=>r.json()).then(d=>{
+    if (d.identity) { document.getElementById('header-title').textContent = d.identity; document.title = d.identity; }
+  }).catch(()=>{}).finally(() => {
     es = new EventSource('/stream');
   es.addEventListener('terminal', (e) => {
   const d = JSON.parse(e.data);
@@ -569,10 +571,7 @@ function loadSettings() {
     const s = d.settings || {};
     if (s.claude_model) document.getElementById('cfg-model').value = s.claude_model;
     if (s.claude_effort) document.getElementById('cfg-effort').value = s.claude_effort;
-    const botName = s.BOT_NAME || 'Clawdy';
-    document.getElementById('cfg-name').value = botName;
-    document.getElementById('header-title').textContent = botName;
-    document.title = botName;
+    document.getElementById('cfg-name').value = s.BOT_NAME || 'Clawdy';
   }).catch(()=>{});
 }
 function saveSettings() {
@@ -1300,7 +1299,11 @@ class ClawdyHandler(BaseHTTPRequestHandler):
             status = STATUS_FILE.read_text().strip() if alive else "offline"
         except Exception:
             status = "idle" if alive else "offline"
-        return {"alive": alive, "status": status, "queue_depth": _inject_queue.qsize()}
+        try:
+            identity = (Path.home() / ".easyclaw" / "identity").read_text().strip().splitlines()[0]
+        except Exception:
+            identity = "Clawdy"
+        return {"alive": alive, "status": status, "queue_depth": _inject_queue.qsize(), "identity": identity}
 
     def _serve_sse(self):
         self.send_response(200)
