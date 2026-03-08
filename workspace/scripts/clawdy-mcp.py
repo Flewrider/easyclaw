@@ -90,7 +90,9 @@ def db_connect() -> sqlite3.Connection:
     return conn
 
 
-MEMORY_MD = HOME / ".claude" / "projects" / "-home-ben" / "memory" / "MEMORY.md"
+# Derive the Claude project slug from HOME path (e.g. /home/ben → -home-ben, /root → -root)
+_home_slug = str(HOME).replace("/", "-")
+MEMORY_MD = HOME / ".claude" / "projects" / _home_slug / "memory" / "MEMORY.md"
 
 
 def rebuild_memory_md() -> None:

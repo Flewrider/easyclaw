@@ -8,7 +8,8 @@
 #   - high-importance (>= 8) memories        → always kept
 
 DB="$HOME/.easyclaw/memories.db"
-MEMORY_MD="$HOME/.claude/projects/-home-ben/memory/MEMORY.md"
+HOME_SLUG="${HOME//\//-}"
+MEMORY_MD="$HOME/.claude/projects/${HOME_SLUG}/memory/MEMORY.md"
 LOG="$HOME/.easyclaw/activity-log.md"
 TIMESTAMP=$(date '+%Y-%m-%d %H:%M')
 
@@ -63,14 +64,17 @@ PYEOF
 echo "[$TIMESTAMP] memory-cleanup: removed ${deleted} stale memories" >> "$LOG"
 
 # Regenerate MEMORY.md index
-MEMORY_DIR="$HOME/.claude/projects/-home-ben/memory"
+MEMORY_DIR="$HOME/.claude/projects/${HOME_SLUG}/memory"
 mkdir -p "$MEMORY_DIR"
 
 python3 - <<PYEOF
 import sqlite3, datetime, os
 
 db_path = os.path.expanduser("~/.easyclaw/memories.db")
-memory_md = os.path.expanduser("~/.claude/projects/-home-ben/memory/MEMORY.md")
+import pathlib
+_home = pathlib.Path.home()
+_slug = str(_home).replace("/", "-")
+memory_md = str(_home / ".claude" / "projects" / _slug / "memory" / "MEMORY.md")
 
 conn = sqlite3.connect(db_path)
 c = conn.cursor()
