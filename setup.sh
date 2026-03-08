@@ -641,6 +641,12 @@ CRONSJSON
         print_success "Created crons.json with HEARTBEAT entry"
     fi
 
+    # Install peers.json (empty template) if not already present — agent populates it with named peer IPs
+    if [ ! -f "${USER_HOME}/.easyclaw/peers.json" ] && [ -f "$SCRIPT_DIR/peers.json" ]; then
+        cp "$SCRIPT_DIR/peers.json" "${USER_HOME}/.easyclaw/peers.json"
+        print_success "Installed peers.json (empty — add peer IPs here)"
+    fi
+
     print_success "Workspace directory created: ${USER_HOME}/.easyclaw/"
     log "INFO" "Created ~/.easyclaw/, scripts/, workspace/crons/, and telegram-files/"
 }

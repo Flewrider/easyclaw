@@ -324,12 +324,26 @@ def _read_identity() -> str:
         return "Clawdy"
 
 
-def impl_send_to_peer(message: str, sender: str = "") -> str:
+def _read_peers() -> dict:
+    """Load ~/.easyclaw/peers.json — maps name -> IP. Returns {} if missing."""
+    try:
+        import json as _json
+        p = Path.home() / ".easyclaw" / "peers.json"
+        if p.exists():
+            return _json.loads(p.read_text())
+    except Exception:
+        pass
+    return {}
+
+
+def impl_send_to_peer(message: str, recipient: str = "", sender: str = "") -> str:
     """POST a message to the peer bot's bridge /inject endpoint over Tailscale.
 
     HTTP 200 = bridge confirmed receipt and tmux inject succeeded = delivered.
     On failure, spawns a background thread to retry after 30s so Claude
     isn't blocked. Alerts Ben only if retry also fails.
+
+    recipient: name from peers.json (e.g. "karly"). If omitted, falls back to PEER_BRIDGE_URL in .env.
     """
     import threading as _threading
     import time as _time
@@ -337,12 +351,20 @@ def impl_send_to_peer(message: str, sender: str = "") -> str:
     if not sender:
         sender = _read_identity()
     env = load_env()
-    peer_url = env.get("PEER_BRIDGE_URL", "").rstrip("/")
     api_key = env.get("BRIDGE_API_KEY", "")
-    if not peer_url:
-        return "PEER_BRIDGE_URL not set in .env."
     if not api_key:
         return "BRIDGE_API_KEY not set in .env."
+
+    if recipient:
+        peers = _read_peers()
+        if recipient not in peers:
+            known = ", ".join(peers.keys()) if peers else "none"
+            return f"Unknown recipient '{recipient}'. Known peers: {known}. Add to ~/.easyclaw/peers.json."
+        peer_url = f"http://{peers[recipient]}:8766"
+    else:
+        peer_url = env.get("PEER_BRIDGE_URL", "").rstrip("/")
+        if not peer_url:
+            return "No recipient specified and PEER_BRIDGE_URL not set in .env."
 
     def _attempt() -> tuple[bool, str]:
         ts = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -959,7 +981,7 @@ async def list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="send_to_peer",
-            description="Send a message to the peer bot (VPS Clawdy) over the Tailscale bridge. The peer bot will receive it as a TELEGRAM injection and can reply via telegram_send.",
+            description="Send a message to a peer bot over Tailscale. Peer IPs are loaded from ~/.easyclaw/peers.json (e.g. {\"karly\": \"100.x.x.x\"}). Always uses port 8766 (plain HTTP). The peer bot receives it as a TELEGRAM injection.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -967,9 +989,13 @@ async def list_tools() -> list[types.Tool]:
                         "type": "string",
                         "description": "Message to send to the peer bot",
                     },
+                    "recipient": {
+                        "type": "string",
+                        "description": "Peer name from peers.json (e.g. 'karly'). Falls back to PEER_BRIDGE_URL if omitted.",
+                    },
                     "sender": {
                         "type": "string",
-                        "description": "Display name shown to the peer (default: SuperClawdy)",
+                        "description": "Display name shown to the peer (default: reads from ~/.easyclaw/identity)",
                     },
                 },
                 "required": ["message"],
@@ -1228,7 +1254,9 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextCont
             )
         elif name == "send_to_peer":
             result = impl_send_to_peer(
-                arguments["message"], arguments.get("sender", "")
+                arguments["message"],
+                arguments.get("recipient", ""),
+                arguments.get("sender", ""),
             )
         elif name == "activity_log":
             result = impl_activity_log(arguments["category"], arguments["description"])
