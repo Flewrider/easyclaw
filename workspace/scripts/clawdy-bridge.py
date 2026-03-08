@@ -1698,10 +1698,15 @@ class ClawdyHandler(BaseHTTPRequestHandler):
         except Exception:
             status = "idle" if alive else "offline"
 
+        try:
+            identity = (Path.home() / ".easyclaw" / "identity").read_text().strip().splitlines()[0]
+        except Exception:
+            identity = "Clawdy"
         self._json({
             "alive": alive,
             "status": status,
             "queue_depth": _inject_queue.qsize(),
+            "identity": identity,
         })
 
     def _json(self, data, code=200):
