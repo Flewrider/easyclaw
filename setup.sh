@@ -617,9 +617,32 @@ install_start_script() {
 create_workspace() {
     print_info "Creating workspace directory ~/.easyclaw/..."
     mkdir -p "${USER_HOME}/.easyclaw/scripts"
+    mkdir -p "${USER_HOME}/.easyclaw/workspace/crons"
     mkdir -p "${USER_HOME}/telegram-files"
+
+    # Install HEARTBEAT.md for the heartbeat cron
+    if [ -f "$SCRIPT_DIR/workspace/crons/HEARTBEAT.md" ]; then
+        cp "$SCRIPT_DIR/workspace/crons/HEARTBEAT.md" "${USER_HOME}/.easyclaw/workspace/crons/HEARTBEAT.md"
+        print_success "Installed HEARTBEAT.md"
+    fi
+
+    # Write crons.json so the dashboard settings page shows the HEARTBEAT cron
+    if [ ! -f "${USER_HOME}/.easyclaw/workspace/crons/crons.json" ]; then
+        cat > "${USER_HOME}/.easyclaw/workspace/crons/crons.json" << 'CRONSJSON'
+[
+  {
+    "name": "HEARTBEAT",
+    "schedule": "*/30 * * * *",
+    "enabled": true,
+    "description": "Runs every 30 minutes while idle — checks tasks and projects"
+  }
+]
+CRONSJSON
+        print_success "Created crons.json with HEARTBEAT entry"
+    fi
+
     print_success "Workspace directory created: ${USER_HOME}/.easyclaw/"
-    log "INFO" "Created ${USER_HOME}/.easyclaw/, scripts/, and telegram-files/"
+    log "INFO" "Created ~/.easyclaw/, scripts/, workspace/crons/, and telegram-files/"
 }
 
 # Step 7c: Install scripts to ~/.easyclaw/scripts/
@@ -630,7 +653,7 @@ install_scripts() {
     local ws="$SCRIPT_DIR/workspace/scripts"
 
     # Copy all workspace scripts to ~/.easyclaw/scripts/
-    for script in clawdy-cron-check.sh clawdy-daily-briefing.sh clawdy-bridge.py clawdy-mcp.py; do
+    for script in clawdy-cron-runner.sh clawdy-daily-briefing.sh clawdy-bridge.py clawdy-mcp.py clawdy-memory-cleanup.sh clawdy-claude-changelog.sh; do
         if [ -f "$ws/$script" ]; then
             cp "$ws/$script" "${USER_HOME}/.easyclaw/scripts/"
             chmod +x "${USER_HOME}/.easyclaw/scripts/$script" 2>/dev/null || true
@@ -659,12 +682,12 @@ install_scripts() {
 
     # Set up crontab — use temp file to avoid pipefail killing us when no crontab exists
     local tmp_cron; tmp_cron=$(mktemp)
-    crontab -l 2>/dev/null | grep -v "clawdy-cron-check" > "$tmp_cron" || true
-    echo "*/30 * * * * ${USER_HOME}/.easyclaw/scripts/clawdy-cron-check.sh" >> "$tmp_cron"
+    crontab -l 2>/dev/null | grep -v "clawdy-cron-runner" | grep -v "clawdy-cron-check" > "$tmp_cron" || true
+    echo "*/30 * * * * ${USER_HOME}/.easyclaw/scripts/clawdy-cron-runner.sh HEARTBEAT >> ${USER_HOME}/.easyclaw/cron-heartbeat.log 2>&1" >> "$tmp_cron"
     crontab "$tmp_cron"
     rm -f "$tmp_cron"
-    print_success "Crontab updated: cron check every 30 min"
-    log "INFO" "Crontab: cron check every 30 min"
+    print_success "Crontab updated: HEARTBEAT cron every 30 min"
+    log "INFO" "Crontab: clawdy-cron-runner.sh HEARTBEAT every 30 min"
 
     # Note: daily briefing cron is NOT added here — it's opt-in, set up by the agent
     # on first startup if the user wants it.
