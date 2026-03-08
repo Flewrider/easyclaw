@@ -68,10 +68,20 @@ if [ -n "$disk_usage" ] && [ "$disk_usage" -ge 80 ] 2>/dev/null; then
   send_telegram "⚠️ Disk usage is at ${disk_usage}% — consider cleaning up."
 fi
 
-# Inject task check via bridge queue (single pipeline for all injections)
+# Inject heartbeat via bridge queue — reads instructions from HEARTBEAT.md
 BRIDGE_PORT=$(grep "^BRIDGE_PORT=" "$HOME/.easyclaw/.env" 2>/dev/null | cut -d= -f2)
 BRIDGE_PORT="${BRIDGE_PORT:-8765}"
-CRON_MSG='Check ~/.easyclaw/tasks.md — if there are pending or in-progress tasks, continue working on them and update their status. Also: (1) check on any running projects (FomoFollow trades/signals, Conway Automaton, meme pipeline) and log status via activity_log; (2) proactively think about what bugs to fix, features to add, or research to do across active projects — if anything good comes to mind, create a task for it; (3) if something can be improved or investigated without waiting for Ben, go ahead and do it.'
+HEARTBEAT_FILE="$HOME/dev/easyclaw/workspace/HEARTBEAT.md"
+
+if [ -f "$HEARTBEAT_FILE" ]; then
+  HEARTBEAT_INSTRUCTIONS=$(cat "$HEARTBEAT_FILE")
+else
+  HEARTBEAT_INSTRUCTIONS="Check ~/.easyclaw/tasks.md for pending tasks and log status via activity_log."
+fi
+
+CRON_MSG="[CRON - HEARTBEAT] Read and follow the instructions in HEARTBEAT.md:
+
+$HEARTBEAT_INSTRUCTIONS"
 
 PAYLOAD=$(python3 -c "import json,sys; print(json.dumps({'message':sys.argv[1],'source':'cron','sender':'cron'}))" "$CRON_MSG")
 if ! curl -sf --max-time 5 -X POST "http://127.0.0.1:$BRIDGE_PORT/chat" \
@@ -79,7 +89,7 @@ if ! curl -sf --max-time 5 -X POST "http://127.0.0.1:$BRIDGE_PORT/chat" \
     -d "$PAYLOAD" > /dev/null 2>&1; then
   # Fallback: direct tmux inject if bridge is unreachable
   CRON_TS=$(date '+%Y-%m-%d %H:%M')
-  tmux send-keys -t "$SESSION:$WINDOW" "[CRON | ${CRON_TS}] ${CRON_MSG}"
+  tmux send-keys -t "$SESSION:$WINDOW" "[CRON - HEARTBEAT | ${CRON_TS}] ${CRON_MSG}"
   sleep 1
   tmux send-keys -t "$SESSION:$WINDOW" "" Enter
 fi
