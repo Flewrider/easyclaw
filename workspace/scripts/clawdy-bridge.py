@@ -42,6 +42,10 @@ _inject_queue = _queue_module.Queue()
 # Typing indicator state
 _typing_thread: threading.Thread | None = None
 _stop_typing_event = threading.Event()
+# Explicit typing override set by MCP after telegram_send — takes priority over tmux detection.
+# None = use tmux detection; True/False = explicit override (cleared after 3s).
+_typing_override: bool | None = None
+_typing_override_until: float = 0.0
 _bot_token: str = ""
 _tg_owner_chat_id: int = 0
 TMUX_SESSION = "claude"
@@ -924,9 +928,8 @@ def start_typing(chat_id, timeout=90):
 
 def stop_typing():
     global _typing_thread
-    if _typing_thread and _typing_thread.is_alive():
-        _stop_typing_event.set()
-        _typing_thread.join(timeout=2)
+    _stop_typing_event.set()
+    # Don't join — avoid blocking the SSE loop for up to 2s. Thread is daemon and exits on its own.
     _typing_thread = None
 
 
@@ -1148,6 +1151,8 @@ class ClawdyHandler(BaseHTTPRequestHandler):
             self._handle_restart_context(data)
         elif self.path == "/api/claude-start":
             self._handle_claude_start()
+        elif self.path == "/api/typing":
+            self._handle_typing_override(data)
         else:
             self.send_response(404)
             self.end_headers()
@@ -1241,6 +1246,17 @@ class ClawdyHandler(BaseHTTPRequestHandler):
             self._json({"ok": True, "restarted": "claude-code"})
         except Exception as e:
             self._json({"ok": False, "error": str(e)}, 500)
+
+    def _handle_typing_override(self, data):
+        """Explicit typing state override from MCP (e.g. after telegram_send)."""
+        global _typing_override, _typing_override_until
+        active = data.get("active")
+        if active is None:
+            self._json({"ok": False, "error": "missing 'active' field"}, 400)
+            return
+        _typing_override = bool(active)
+        _typing_override_until = time.time() + 3.0
+        self._json({"ok": True, "active": _typing_override})
 
     def _serve_chat_history(self):
         from urllib.parse import urlparse, parse_qs
@@ -1372,7 +1388,12 @@ class ClawdyHandler(BaseHTTPRequestHandler):
                     )
                     visible = re.sub(r'\x1b\[[0-9;]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b[^[Oc]', '', visible_r.stdout)
                     last3 = "\n".join(visible.splitlines()[-3:])
-                    is_typing = bool(re.search(r'esc to interrupt', last3, re.IGNORECASE))
+                    # Check explicit override (set by MCP after telegram_send)
+                    _now = time.time()
+                    if _typing_override is not None and _now < _typing_override_until:
+                        is_typing = _typing_override
+                    else:
+                        is_typing = bool(re.search(r'esc to interrupt', last3, re.IGNORECASE))
                 except Exception:
                     is_typing = False
                 if is_typing != last_typing:

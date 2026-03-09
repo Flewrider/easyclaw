@@ -280,6 +280,17 @@ def impl_telegram_send(message: str, chat_id: int | str | None = None) -> str:
     except Exception:
         pass
 
+    # Notify bridge to clear typing indicator immediately (don't wait for next SSE tick)
+    try:
+        import requests as _rq2, time as _time2
+        bridge_port = int(env.get("BRIDGE_PORT", "8765")) + 1
+        _rq2.post(
+            f"http://127.0.0.1:{bridge_port}/api/typing",
+            json={"active": False}, timeout=1,
+        )
+    except Exception:
+        pass
+
     sent_info = f"{len(message)} chars" if len(chunks) == 1 else f"{len(message)} chars in {len(chunks)} parts"
     return f"Sent ({sent_info})."
 
