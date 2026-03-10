@@ -431,6 +431,24 @@ def impl_send_to_peer(message: str, recipient: str = "", sender: str = "") -> st
     return f"Sent to peer (retry pending): {message[:80]}"
 
 
+TOTP_SECRETS_FILE = Path.home() / ".easyclaw" / "totp_secrets.json"
+
+
+def impl_totp_generate(account: str) -> str:
+    """Generate a current TOTP code for a stored account."""
+    import json
+    import pyotp
+    if not TOTP_SECRETS_FILE.exists():
+        return f"No TOTP secrets file found. Add accounts first with totp_add."
+    with open(TOTP_SECRETS_FILE) as f:
+        secrets = json.load(f)
+    if account not in secrets:
+        available = ", ".join(secrets.keys()) or "none"
+        return f"Account '{account}' not found. Available: {available}"
+    code = pyotp.TOTP(secrets[account]).now()
+    return f"{code}"
+
+
 def impl_activity_log(category: str, description: str) -> str:
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
     entry = f"[{timestamp}] {category}: {description}\n"
@@ -958,6 +976,17 @@ async def list_tools() -> list[types.Tool]:
             },
         ),
         types.Tool(
+            name="totp_generate",
+            description="Generate the current TOTP 2FA code for a stored account (e.g. 'flewmoltbot').",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "account": {"type": "string", "description": "Account name (e.g. 'flewmoltbot')"},
+                },
+                "required": ["account"],
+            },
+        ),
+        types.Tool(
             name="telegram_send",
             description="Send a message to the user via Telegram. Typing indicator is managed automatically by the bridge.",
             inputSchema={
@@ -1254,6 +1283,8 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextCont
             result = impl_memory_show(int(arguments["id"]))
         elif name == "memory_list":
             result = impl_memory_list(int(arguments.get("days", 7)))
+        elif name == "totp_generate":
+            result = impl_totp_generate(arguments["account"])
         elif name == "telegram_send":
             result = impl_telegram_send(
                 arguments["message"],
