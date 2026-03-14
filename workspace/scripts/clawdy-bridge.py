@@ -240,9 +240,9 @@ body{background:#0f0f0f;color:#e8e8e8;font-family:-apple-system,'Segoe UI',syste
       <div class="setting-row">
         <label>Model</label>
         <select id="cfg-model">
-          <option value="claude-haiku-4-5-20251001">Haiku 4.5 (fast)</option>
-          <option value="claude-sonnet-4-6">Sonnet 4.6</option>
-          <option value="claude-opus-4-6">Opus 4.6</option>
+          <option value="haiku">Haiku 4.5 (fast)</option>
+          <option value="sonnet">Sonnet 4.6</option>
+          <option value="opus">Opus 4.6 (1M context)</option>
         </select>
       </div>
       <div class="setting-row">
@@ -1607,7 +1607,14 @@ class ClawdyHandler(BaseHTTPRequestHandler):
         try:
             claude_settings_file = Path.home() / ".claude" / "settings.json"
             cs = json.loads(claude_settings_file.read_text())
-            settings["claude_model"] = cs.get("model", "claude-sonnet-4-6")
+            # Normalize full model IDs to shorthands for the dropdown
+            _model_raw = cs.get("model", "sonnet")
+            _model_map = {
+                "claude-opus-4-6": "opus",
+                "claude-sonnet-4-6": "sonnet",
+                "claude-haiku-4-5-20251001": "haiku",
+            }
+            settings["claude_model"] = _model_map.get(_model_raw, _model_raw)
             settings["claude_effort"] = cs.get("effortLevel", "medium")
         except Exception:
             pass

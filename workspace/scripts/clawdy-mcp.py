@@ -700,7 +700,7 @@ def _parse_agent_output(raw: str) -> str:
 
 async def impl_spawn_agent(
     prompt: str,
-    model: str = "claude-haiku-4-5-20251001",
+    model: str = "haiku",
     allowed_tools: list[str] | None = None,
 ) -> str:
     """Launch a headless Claude subagent and return its response + session ID."""
@@ -739,7 +739,7 @@ async def impl_spawn_agent(
 async def impl_converse_with_agent(
     session_id: str,
     prompt: str,
-    model: str = "claude-haiku-4-5-20251001",
+    model: str = "haiku",
     allowed_tools: list[str] | None = None,
 ) -> str:
     """Send a follow-up prompt to a previously spawned headless agent session."""
@@ -1154,8 +1154,8 @@ async def list_tools() -> list[types.Tool]:
                     "prompt": {"type": "string", "description": "The prompt to send to the subagent"},
                     "model": {
                         "type": "string",
-                        "description": "Model to use. Aliases: 'haiku', 'sonnet', 'opus', or full model ID. Default: claude-haiku-4-5-20251001",
-                        "default": "claude-haiku-4-5-20251001",
+                        "description": "Model to use. Aliases: 'haiku', 'sonnet', 'opus', or full model ID. Default: haiku",
+                        "default": "haiku",
                     },
                     "allowed_tools": {
                         "type": "array",
@@ -1226,8 +1226,8 @@ async def list_tools() -> list[types.Tool]:
                     "prompt": {"type": "string", "description": "Follow-up prompt to send"},
                     "model": {
                         "type": "string",
-                        "description": "Model to use (defaults to claude-haiku-4-5-20251001)",
-                        "default": "claude-haiku-4-5-20251001",
+                        "description": "Model to use (defaults to haiku)",
+                        "default": "haiku",
                     },
                     "allowed_tools": {
                         "type": "array",
@@ -1324,14 +1324,14 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextCont
         elif name == "spawn_agent":
             result = await impl_spawn_agent(
                 arguments["prompt"],
-                arguments.get("model", "claude-haiku-4-5-20251001"),
+                arguments.get("model", "haiku"),
                 arguments.get("allowed_tools"),
             )
         elif name == "converse_with_agent":
             result = await impl_converse_with_agent(
                 arguments["session_id"],
                 arguments["prompt"],
-                arguments.get("model", "claude-haiku-4-5-20251001"),
+                arguments.get("model", "haiku"),
                 arguments.get("allowed_tools"),
             )
         elif name == "project_add":
