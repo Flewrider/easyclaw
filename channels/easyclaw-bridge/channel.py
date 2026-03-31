@@ -260,7 +260,20 @@ async def poll_and_push(write_stream):
                     meta["sender"] = msg.get("sender", "")
                     meta["msg_id"] = str(msg["id"])
 
-                    notification = build_channel_notification(msg["content"], meta)
+                    # Format content with sender/source prefix so Claude sees who sent it
+                    content = msg["content"]
+                    source = msg["source"]
+                    sender = msg.get("sender", "")
+                    if source == "peer" and sender:
+                        content = f"[PEER from {sender}]: {content}"
+                    elif source == "cron" and sender:
+                        content = f"[CRON - {sender}] {content}"
+                    elif source == "cron":
+                        content = f"[CRON] {content}"
+                    elif source == "dashboard" and sender:
+                        content = f"[DASHBOARD from {sender}]: {content}"
+
+                    notification = build_channel_notification(content, meta)
                     await write_stream.send(notification)
 
                     ack_ids.append(msg["id"])
