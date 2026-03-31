@@ -117,6 +117,9 @@ body{background:#0f0f0f;color:#e8e8e8;font-family:-apple-system,'Segoe UI',syste
 .bubble-wrap.user .bubble-sender{color:rgba(255,255,255,.7)}
 
 /* Chat input */
+#key-row{display:flex;gap:6px;padding:6px 12px 0;background:#1a1a1a}
+.key-btn{background:#2a2a2a;border:1px solid #3a3a3a;border-radius:8px;color:#aaa;font-size:16px;padding:4px 14px;cursor:pointer;flex:1;transition:background .15s}
+.key-btn:active{background:#007aff;color:#fff}
 #chat-input-row{display:flex;padding:10px 12px;gap:8px;border-top:1px solid #2a2a2a;background:#1a1a1a;align-items:flex-end;padding-bottom:calc(10px + env(safe-area-inset-bottom))}
 #ptt-btn{background:#1e1e1e;border:1px solid #333;border-radius:10px;color:#888;font-size:16px;padding:6px 10px;cursor:pointer;flex-shrink:0;transition:background .15s,color .15s,border-color .15s;user-select:none;-webkit-user-select:none;touch-action:none}
 #typing-bubble{display:none;align-items:center;gap:5px;padding:4px 10px 10px 14px}
@@ -190,6 +193,11 @@ body{background:#0f0f0f;color:#e8e8e8;font-family:-apple-system,'Segoe UI',syste
       <button id="load-more" onclick="loadMore()">&#8593; Load earlier</button>
     </div>
     <div id="typing-bubble"><div class="tdot"></div><div class="tdot"></div><div class="tdot"></div></div>
+    <div id="key-row">
+      <button class="key-btn" onclick="sendKey('Up')" title="Arrow Up">&#8593;</button>
+      <button class="key-btn" onclick="sendKey('Down')" title="Arrow Down">&#8595;</button>
+      <button class="key-btn" onclick="sendKey('Enter')" title="Enter">&#9166;</button>
+    </div>
     <div id="chat-input-row">
       <button id="ptt-btn" title="Hold to talk (or hold Space when not typing)" onmousedown="pttStart(event)" onmouseup="pttStop(event)" ontouchstart="pttStart(event)" ontouchend="pttStop(event)">&#127908;</button>
       <textarea id="chat-in" rows="1" placeholder="Message Claude..."></textarea>
@@ -525,6 +533,10 @@ chatIn.addEventListener('input', () => {
   chatIn.style.height = '';
   chatIn.style.height = Math.min(chatIn.scrollHeight, 120) + 'px';
 });
+function sendKey(key) {
+  fetch('/api/tmux-key', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({key})})
+    .catch(e=>console.error(e));
+}
 
 // Services
 function loadServices() {
@@ -928,6 +940,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._handle_restart()
         elif self.path == "/api/claude-start":
             self._handle_claude_start()
+        elif self.path == "/api/tmux-key":
+            self._handle_tmux_key(data)
         else:
             self.send_response(404)
             self.end_headers()
@@ -950,6 +964,21 @@ class DashboardHandler(BaseHTTPRequestHandler):
         else:
             enqueue_injection(msg, sender, source=source)
         self._json({"ok": True})
+
+    def _handle_tmux_key(self, data):
+        ALLOWED = {"Enter", "Up", "Down", "Left", "Right", "Escape", "Tab", "C-c"}
+        key = data.get("key", "")
+        if key not in ALLOWED:
+            self._json({"ok": False, "error": "invalid key"}, 400)
+            return
+        try:
+            subprocess.run(
+                ["tmux", "send-keys", "-t", f"{TMUX_SESSION}:{TMUX_WINDOW}", "", key],
+                check=True,
+            )
+            self._json({"ok": True})
+        except subprocess.CalledProcessError as e:
+            self._json({"ok": False, "error": str(e)}, 500)
 
     # ── Service restart ───────────────────────────────────────────────────
 
