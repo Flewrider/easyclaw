@@ -1,0 +1,17 @@
+[Unit]
+Description=Claude Code with Channels (Telegram + Peer Bridge + Cron)
+After=network.target tailscaled.service
+
+[Service]
+Type=simple
+User=ben
+WorkingDirectory=/home/ben
+ExecStart=/home/ben/dev/easyclaw/claude-start-channels.sh
+Restart=always
+RestartSec=10
+Environment=DISPLAY=:0
+Environment=HOME=/home/ben
+Environment=IS_SANDBOX=1
+
+[Install]
+WantedBy=multi-user.target
