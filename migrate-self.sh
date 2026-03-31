@@ -118,8 +118,8 @@ log "Systemd service installed"
 
 # Step 8: Start dashboard
 kill $(pgrep -f "channels/dashboard.py") 2>/dev/null || true
-DASHBOARD_PORT=8766 nohup python3 "$REPO_DIR/channels/dashboard.py" > "$EASYCLAW/logs/dashboard.log" 2>&1 &
-log "Dashboard started on port 8766"
+DASHBOARD_PORT=8765 nohup python3 "$REPO_DIR/channels/dashboard.py" > "$EASYCLAW/logs/dashboard.log" 2>&1 &
+log "Dashboard started on port 8765"
 
 # Step 9: Start new Claude with channels
 log "Starting Claude Code with channels..."

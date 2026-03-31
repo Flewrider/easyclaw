@@ -932,6 +932,7 @@ ExecStart=/usr/bin/python3 $dashboard_src
 Restart=always
 RestartSec=5
 Environment=HOME=$(eval echo ~$SETUP_USER)
+Environment=DASHBOARD_PORT=8765
 
 [Install]
 WantedBy=multi-user.target

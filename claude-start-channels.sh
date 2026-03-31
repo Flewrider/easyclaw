@@ -73,14 +73,16 @@ echo "[channels] Repo:     $REPO_DIR"
 
 tmux new-session -d -s "$SESSION" -c "$HOME" -n "claude" \
   "while true; do \
+    (sleep 5 && tmux send-keys -t claude Enter 2>/dev/null) & \
     $CLAUDE \"\$(cat $CTX_FILE)\" --continue --dangerously-skip-permissions --chrome \
       --mcp-config $CHANNELS_MCP \
       --channels plugin:telegram@claude-plugins-official \
       --dangerously-load-development-channels server:easyclaw-bridge \
-    || $CLAUDE \"\$(cat $CTX_FILE)\" --dangerously-skip-permissions --chrome \
+    || { (sleep 5 && tmux send-keys -t claude Enter 2>/dev/null) & \
+    $CLAUDE \"\$(cat $CTX_FILE)\" --dangerously-skip-permissions --chrome \
       --mcp-config $CHANNELS_MCP \
       --channels plugin:telegram@claude-plugins-official \
-      --dangerously-load-development-channels server:easyclaw-bridge; \
+      --dangerously-load-development-channels server:easyclaw-bridge; }; \
     echo \"[claude exited — restarting in 3s...]\"; sleep 3; \
   done"
 
