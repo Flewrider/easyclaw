@@ -305,9 +305,15 @@ def _handle_heartbeat(db: sqlite3.Connection, data: dict) -> bytes:
 
 
 def _handle_revert_inflight(db: sqlite3.Connection) -> bytes:
-    """Revert all in_flight messages back to pending (called on channel startup)."""
+    """Revert stale in_flight messages back to pending (called on channel startup).
+
+    Only reverts messages that have been in_flight for >30 seconds — this prevents
+    mid-session duplicates while still catching crashed sessions on restart.
+    """
+    cutoff = time.time() - 30
     cursor = db.execute(
-        "UPDATE messages SET status='pending', delivered_at=NULL WHERE status='in_flight'"
+        "UPDATE messages SET status='pending', delivered_at=NULL WHERE status='in_flight' AND delivered_at < ?",
+        (cutoff,),
     )
     reverted = cursor.rowcount
     logger.info("Reverted %d in_flight messages to pending", reverted)
