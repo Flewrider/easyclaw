@@ -144,6 +144,17 @@ async def handle_request(reader: asyncio.StreamReader, writer: asyncio.StreamWri
             data = json.loads(body.decode())
             response = _handle_heartbeat(db, data)
 
+        elif method == "POST" and path == "/api/log-outbound":
+            data = json.loads(body.decode())
+            _log_chat_history(
+                source=data.get("source", "clawdy"),
+                sender=data.get("sender", ""),
+                text=data.get("text", ""),
+                ts=time.time(),
+                direction="out",
+            )
+            response = _json_response(200, {"ok": True})
+
         # Legacy compatibility: accept /inject from old peer bots
         elif method == "POST" and path == "/inject":
             data = json.loads(body.decode())
@@ -179,13 +190,35 @@ def _handle_send(db: sqlite3.Connection, data: dict) -> bytes:
     if not content:
         return _json_response(400, {"error": "content required"})
 
+    now = time.time()
     cursor = db.execute(
         "INSERT INTO messages (source, sender, content, meta, status, created_at, ttl_seconds) VALUES (?,?,?,?,?,?,?)",
-        (source, sender, content, meta, "pending", time.time(), ttl),
+        (source, sender, content, meta, "pending", now, ttl),
     )
     msg_id = cursor.lastrowid
     logger.info("Queued message #%d from %s/%s: %s", msg_id, source, sender, content[:60])
+
+    # Also log to chat-history.jsonl for dashboard compatibility
+    _log_chat_history(source, sender, content, now, direction="in")
+
     return _json_response(200, {"id": msg_id, "status": "queued"})
+
+
+def _log_chat_history(source: str, sender: str, text: str, ts: float, direction: str = "in"):
+    """Append to chat-history.jsonl in the format the dashboard expects."""
+    try:
+        entry = {
+            "ts": ts,
+            "dir": direction,
+            "source": source,
+            "sender": sender,
+            "text": text,
+        }
+        chat_history = EASYCLAW_DIR / "chat-history.jsonl"
+        with open(chat_history, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+    except Exception as e:
+        logger.debug("Failed to log chat history: %s", e)
 
 
 def _handle_poll(db: sqlite3.Connection, data: dict) -> bytes:
