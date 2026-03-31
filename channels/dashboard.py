@@ -244,16 +244,22 @@ body{background:#0f0f0f;color:#e8e8e8;font-family:-apple-system,'Segoe UI',syste
       <p style="font-size:11px;color:#555;margin:4px 0 10px">Values are write-only — existing keys show as set. Leave blank to keep current value.</p>
       <div class="setting-row">
         <label>Telegram Bot Token</label>
-        <div style="display:flex;align-items:center;gap:8px;flex:1">
-          <input id="sec-telegram" type="password" placeholder="Enter new value…" style="flex:1" />
-          <span id="sec-telegram-status" style="font-size:11px;color:#555;white-space:nowrap"></span>
+        <div style="display:flex;flex-direction:column;gap:4px;flex:1">
+          <div style="display:flex;align-items:center;gap:8px">
+            <input id="sec-telegram" type="password" placeholder="Enter new value…" style="flex:1" />
+            <span id="sec-telegram-status" style="font-size:11px;color:#555;white-space:nowrap"></span>
+          </div>
+          <span style="font-size:10px;color:#444">Stored in: <code style="color:#666">~/.easyclaw/.env</code> + <code style="color:#666">~/.claude/channels/telegram/.env</code> (plugin)</span>
         </div>
       </div>
       <div class="setting-row">
         <label>Groq API Key</label>
-        <div style="display:flex;align-items:center;gap:8px;flex:1">
-          <input id="sec-groq" type="password" placeholder="Enter new value…" style="flex:1" />
-          <span id="sec-groq-status" style="font-size:11px;color:#555;white-space:nowrap"></span>
+        <div style="display:flex;flex-direction:column;gap:4px;flex:1">
+          <div style="display:flex;align-items:center;gap:8px">
+            <input id="sec-groq" type="password" placeholder="Enter new value…" style="flex:1" />
+            <span id="sec-groq-status" style="font-size:11px;color:#555;white-space:nowrap"></span>
+          </div>
+          <span style="font-size:10px;color:#444">Used for: voice transcription (PTT button) via <code style="color:#666">whisper-large-v3-turbo</code></span>
         </div>
       </div>
       <button onclick="saveSecrets()" style="margin-top:6px">Save secrets</button>
@@ -1509,6 +1515,24 @@ class DashboardHandler(BaseHTTPRequestHandler):
         except Exception as e:
             self._json({"ok": False, "error": str(e)}, 500)
             return
+        # Sync Telegram token to the official plugin's .env as well
+        if "TELEGRAM_BOT_TOKEN" in updated:
+            try:
+                tg_env_dir = Path.home() / ".claude" / "channels" / "telegram"
+                tg_env_dir.mkdir(parents=True, exist_ok=True)
+                tg_env_file = tg_env_dir / ".env"
+                token_val = data["TELEGRAM_BOT_TOKEN"].strip()
+                if tg_env_file.exists():
+                    tg_text = tg_env_file.read_text()
+                    if re.search(r"^TELEGRAM_BOT_TOKEN=", tg_text, re.MULTILINE):
+                        tg_text = re.sub(r"^TELEGRAM_BOT_TOKEN=.*$", f"TELEGRAM_BOT_TOKEN={token_val}", tg_text, flags=re.MULTILINE)
+                    else:
+                        tg_text += f"\nTELEGRAM_BOT_TOKEN={token_val}"
+                else:
+                    tg_text = f"TELEGRAM_BOT_TOKEN={token_val}\n"
+                tg_env_file.write_text(tg_text)
+            except Exception as e:
+                log.warning(f"Failed to sync token to telegram plugin .env: {e}")
         self._json({"ok": True, "updated": updated})
 
     # ── Activity ──────────────────────────────────────────────────────────
