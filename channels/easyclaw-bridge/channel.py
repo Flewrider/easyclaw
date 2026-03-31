@@ -237,6 +237,13 @@ def build_channel_notification(content: str, meta: dict[str, str] | None = None)
 
 # --- Polling + Push Loop ---
 
+async def delayed_ack(ids: list[int], delay: float = 300):
+    """Ack messages after a delay. Keeps them in_flight so a crash within the
+    window causes them to be reverted to pending and replayed on next startup."""
+    await asyncio.sleep(delay)
+    await broker_request("/ack", {"ids": ids, "success": True})
+
+
 async def poll_and_push(write_stream):
     """Poll broker for messages and push to Claude via channel notifications."""
     # Wait for MCP initialization handshake to complete before sending notifications.
@@ -282,9 +289,10 @@ async def poll_and_push(write_stream):
                 except Exception as e:
                     logger.error("Failed to push message #%d: %s", msg["id"], e)
 
-            # Acknowledge delivered messages
+            # Schedule delayed ack (5 min) — keeps messages in_flight so they
+            # survive a crash and get replayed on next startup.
             if ack_ids:
-                await broker_request("/ack", {"ids": ack_ids, "success": True})
+                asyncio.create_task(delayed_ack(ack_ids, delay=300))
 
         except Exception as e:
             logger.debug("Poll error: %s", e)
@@ -310,6 +318,11 @@ async def run():
 
     # Register with broker
     await broker_request("/register", {"id": CONSUMER_ID, "pid": os.getpid()})
+
+    # Revert any messages that were in_flight when the previous session crashed
+    result = await broker_request("/revert-inflight")
+    if result.get("reverted", 0) > 0:
+        logger.info("Replaying %d messages from crashed session", result["reverted"])
 
     # Start MCP server on stdio
     async with stdio_server() as (read_stream, write_stream):

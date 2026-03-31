@@ -11,8 +11,9 @@ Endpoints:
   POST /poll       — fetch & mark undelivered messages for a recipient
   POST /ack        — confirm message was processed (or revert to pending)
   GET  /health     — liveness check
-  POST /register   — register a channel consumer (for health tracking)
-  POST /heartbeat  — keep-alive from channel consumer
+  POST /register        — register a channel consumer (for health tracking)
+  POST /heartbeat       — keep-alive from channel consumer
+  POST /revert-inflight — revert all in_flight messages to pending (called on channel startup)
 
 Port: BROKER_PORT env or 7899
 DB:   ~/.easyclaw/broker.db
@@ -143,6 +144,9 @@ async def handle_request(reader: asyncio.StreamReader, writer: asyncio.StreamWri
         elif method == "POST" and path == "/heartbeat":
             data = json.loads(body.decode())
             response = _handle_heartbeat(db, data)
+
+        elif method == "POST" and path == "/revert-inflight":
+            response = _handle_revert_inflight(db)
 
         elif method == "POST" and path == "/api/log-outbound":
             data = json.loads(body.decode())
@@ -298,6 +302,16 @@ def _handle_heartbeat(db: sqlite3.Connection, data: dict) -> bytes:
     consumer_id = data.get("id", "unknown")
     db.execute("UPDATE consumers SET last_seen=? WHERE id=?", (time.time(), consumer_id))
     return _json_response(200, {"ok": True})
+
+
+def _handle_revert_inflight(db: sqlite3.Connection) -> bytes:
+    """Revert all in_flight messages back to pending (called on channel startup)."""
+    cursor = db.execute(
+        "UPDATE messages SET status='pending', delivered_at=NULL WHERE status='in_flight'"
+    )
+    reverted = cursor.rowcount
+    logger.info("Reverted %d in_flight messages to pending", reverted)
+    return _json_response(200, {"reverted": reverted})
 
 
 def _count_pending(db: sqlite3.Connection) -> int:

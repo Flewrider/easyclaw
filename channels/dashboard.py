@@ -955,7 +955,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     def _handle_restart(self):
         svc = self.path.split("/api/restart/", 1)[-1]
-        if svc in ("claude-code", "claude-code.service"):
+        if svc in ("claude-code", "claude-code.service", "claude-code-channels", "claude-code-channels.service"):
             self._handle_claude_start()
             return
         try:
@@ -970,13 +970,17 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._json({"ok": False, "error": str(e)}, 500)
 
     def _handle_claude_start(self):
-        """Kill the Claude tmux session and relaunch via claude-start.sh."""
+        """Restart the Claude channels service."""
         try:
-            subprocess.run(["tmux", "kill-session", "-t", TMUX_SESSION], capture_output=True)
-            time.sleep(1)
-            start_sh = Path.home() / "claude-start.sh"
-            subprocess.Popen([str(start_sh)], start_new_session=True)
-            self._json({"ok": True, "restarted": "claude-code"})
+            r = subprocess.run(
+                ["sudo", "systemctl", "restart", "claude-code-channels.service"],
+                capture_output=True, text=True, timeout=15,
+            )
+            if r.returncode == 0:
+                self._json({"ok": True, "restarted": "claude-code-channels"})
+                return
+            error = r.stderr.strip() or r.stdout.strip() or "unknown error"
+            self._json({"ok": False, "error": f"claude-code-channels.service failed: {error}"}, 500)
         except Exception as e:
             self._json({"ok": False, "error": str(e)}, 500)
 
@@ -1205,7 +1209,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
     # ── Services ──────────────────────────────────────────────────────────
 
     def _serve_services(self):
-        services = ["claude-code.service", "clawdy-bridge.service"]
+        # Core systemd services to always check
+        systemd_services = [
+            "claude-code-channels.service",
+            "claude-code.service",      # legacy, may be disabled
+            "clawdy-bridge.service",    # legacy, may be disabled
+        ]
+        # Scan for additional loaded services matching known patterns
         try:
             r = subprocess.run(
                 ["systemctl", "list-units", "--no-legend", "--no-pager",
@@ -1216,14 +1226,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 parts = line.split()
                 if parts:
                     name = parts[0]
-                    if any(x in name for x in ("meme-scanner", "fomofollow", "clawdy-")):
-                        if name not in services:
-                            services.append(name)
+                    if any(x in name for x in ("meme-scanner", "fomofollow", "clawdy-", "easyclaw-", "brainrot")):
+                        if name not in systemd_services:
+                            systemd_services.append(name)
         except Exception:
             pass
 
         statuses = []
-        for svc in services:
+        for svc in systemd_services:
             try:
                 r = subprocess.run(
                     ["systemctl", "is-active", svc],
@@ -1232,6 +1242,36 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 statuses.append({"name": svc, "active": r.stdout.strip() == "active"})
             except Exception:
                 statuses.append({"name": svc, "active": False})
+
+        # Process-based services (broker and dashboard run as plain processes)
+        process_checks = [
+            ("broker (process)", "broker.py"),
+            ("dashboard (process)", "dashboard.py"),
+        ]
+        try:
+            ps = subprocess.run(
+                ["ps", "aux"], capture_output=True, text=True, timeout=5,
+            )
+            ps_lines = ps.stdout.splitlines()
+            for display_name, script_name in process_checks:
+                pid = None
+                for line in ps_lines:
+                    if script_name in line and "python" in line:
+                        parts = line.split()
+                        if len(parts) > 1:
+                            try:
+                                pid = int(parts[1])
+                            except ValueError:
+                                pass
+                        break
+                entry = {"name": display_name, "active": pid is not None}
+                if pid is not None:
+                    entry["pid"] = pid
+                statuses.append(entry)
+        except Exception:
+            for display_name, _ in process_checks:
+                statuses.append({"name": display_name, "active": False})
+
         self._json({"services": statuses})
 
     # ── Crons ─────────────────────────────────────────────────────────────
