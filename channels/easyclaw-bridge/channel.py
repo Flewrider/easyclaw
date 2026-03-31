@@ -107,10 +107,15 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextCont
         if recipient not in peers:
             return [types.TextContent(type="text", text=f"Unknown peer: {recipient}. Available: {', '.join(peers.keys())}")]
 
-        peer_info = peers[recipient]
-        # Post to peer's broker (or legacy bridge endpoint)
+        raw = peers[recipient]
+        # Support both formats: "ip_string" or {ip, port, broker_port, api_key}
+        if isinstance(raw, str):
+            peer_info = {"ip": raw}
+        else:
+            peer_info = raw
+        peer_ip = peer_info["ip"]
         peer_port = peer_info.get("broker_port", peer_info.get("port", 7899))
-        peer_url = f"http://{peer_info['ip']}:{peer_port}/send"
+        peer_url = f"http://{peer_ip}:{peer_port}/send"
 
         payload = {
             "source": "peer",
@@ -128,7 +133,8 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextCont
                         return [types.TextContent(type="text", text=f"Sent to peer: {message[:80]}")]
                     else:
                         # Fallback: try legacy /inject endpoint
-                        legacy_url = f"http://{peer_info['ip']}:{peer_info.get('port', 8766)}/inject"
+                        legacy_port = peer_info.get("port", 8766)
+                        legacy_url = f"http://{peer_ip}:{legacy_port}/inject"
                         async with session.post(legacy_url, json={"message": message, "sender": CONSUMER_ID, "source": "peer"}, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as resp2:
                             if resp2.status == 200:
                                 return [types.TextContent(type="text", text=f"Sent to peer (legacy): {message[:80]}")]
