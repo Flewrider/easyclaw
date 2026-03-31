@@ -206,6 +206,23 @@ check_dependencies() {
         log "DEBUG" "Found: claude CLI ($(claude --version 2>/dev/null | head -1))"
     fi
 
+    # Check bun — required by Telegram channels plugin
+    if ! command -v bun &> /dev/null && [ ! -f "$HOME/.bun/bin/bun" ]; then
+        print_info "Bun not found — installing (required by Telegram plugin)..."
+        log "INFO" "Installing bun via official installer"
+        if curl -fsSL https://bun.sh/install | bash; then
+            export PATH="$HOME/.bun/bin:$PATH"
+            print_success "Bun installed"
+            log "INFO" "Bun installed successfully"
+        else
+            missing+=("bun — install failed, retry manually: curl -fsSL https://bun.sh/install | bash")
+            log "ERROR" "Bun install failed"
+        fi
+    else
+        export PATH="$HOME/.bun/bin:$PATH"
+        log "DEBUG" "Found: bun ($(bun --version 2>/dev/null || echo 'unknown'))"
+    fi
+
     # Check Python version if present
     if command -v python3 &> /dev/null; then
         py_version=$(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')
@@ -213,6 +230,18 @@ check_dependencies() {
         if [[ $(printf '%s\n' "3.8" "$py_version" | sort -V | head -n 1) != "3.8" ]]; then
             missing+=("python3 (>=3.8, found $py_version)")
             log "ERROR" "Python version too old: $py_version"
+        fi
+    fi
+
+    # Install Python packages needed by channels (aiohttp for bridge, mcp for MCP server)
+    if command -v python3 &> /dev/null; then
+        print_info "Installing Python packages (aiohttp, mcp)..."
+        if python3 -m pip install --quiet --break-system-packages --ignore-installed aiohttp mcp 2>&1 | tee -a "$LOG_FILE"; then
+            log "INFO" "Python packages installed: aiohttp, mcp"
+            print_success "Python packages installed (aiohttp, mcp)"
+        else
+            print_warn "pip install aiohttp/mcp failed — channels may not work"
+            log "WARN" "pip install aiohttp mcp failed"
         fi
     fi
 
@@ -591,26 +620,104 @@ install_mcp_server() {
     print_success "Claude Code settings configured"
 }
 
-# Step 7: Install claude-start.sh wrapper script
-install_start_script() {
-    print_info "Installing claude-start.sh..."
+# Step 6c: Install Telegram channels plugin
+install_telegram_plugin() {
+    print_info "Installing Telegram channels plugin..."
 
-    local template="$SCRIPT_DIR/claude-start.sh.template"
-    local dest="${USER_HOME}/claude-start.sh"
+    # Ensure bun is on PATH (required by the plugin)
+    export PATH="$HOME/.bun/bin:$PATH"
 
-    if [ ! -f "$template" ]; then
-        print_error "claude-start.sh.template not found in $SCRIPT_DIR"
+    if ! command -v claude &> /dev/null; then
+        print_error "Claude CLI not found — cannot install plugin"
         return 1
     fi
 
-    sed \
-        -e "s|%%HOME%%|$USER_HOME|g" \
-        -e "s|%%BOT_NAME%%|$BOT_NAME|g" \
-        "$template" > "$dest"
+    # Install the official Telegram plugin
+    print_info "Running: claude plugin install telegram@claude-plugins-official"
+    if claude plugin install telegram@claude-plugins-official 2>&1 | tee -a "$LOG_FILE"; then
+        print_success "Telegram plugin installed"
+        log "INFO" "Telegram plugin installed via claude plugin install"
+    else
+        print_warn "Telegram plugin install failed — may need manual install"
+        log "WARN" "claude plugin install telegram@claude-plugins-official failed"
+    fi
 
+    # Configure Telegram plugin token from .env
+    local telegram_state="${USER_HOME}/.claude/channels/telegram"
+    mkdir -p "$telegram_state"
+
+    local env_file="${USER_HOME}/.easyclaw/.env"
+
+    # Write .env for the Telegram plugin (bot token)
+    if [ -f "$env_file" ]; then
+        local token
+        token=$(grep "^TELEGRAM_BOT_TOKEN=" "$env_file" 2>/dev/null | cut -d= -f2)
+        if [ -n "$token" ] && [ "$token" != "your_bot_token_here" ]; then
+            echo "TELEGRAM_BOT_TOKEN=$token" > "$telegram_state/.env"
+            chmod 600 "$telegram_state/.env"
+            print_success "Telegram plugin .env configured"
+            log "INFO" "Wrote Telegram token to $telegram_state/.env"
+        else
+            print_warn "No Telegram token found in .env — plugin won't work until configured"
+            log "WARN" "Skipped Telegram .env — no token in $env_file"
+        fi
+
+        # Write access.json (allowlist from TELEGRAM_CHAT_ID in .env)
+        local chat_ids
+        chat_ids=$(grep "^TELEGRAM_CHAT_ID=" "$env_file" 2>/dev/null | cut -d= -f2)
+        if [ -n "$chat_ids" ]; then
+            local allow_json
+            allow_json=$(python3 -c "
+import json
+ids = \"$chat_ids\".split(',')
+ids = [i.strip() for i in ids if i.strip()]
+print(json.dumps(ids))
+" 2>/dev/null)
+            cat > "$telegram_state/access.json" << EOFACCESS
+{"dmPolicy":"allowlist","allowFrom":${allow_json:-[]},"groups":{},"pending":{},"ackReaction":"eyes"}
+EOFACCESS
+            print_success "Telegram access.json configured (chat IDs: $chat_ids)"
+            log "INFO" "Wrote access.json with chat IDs: $chat_ids"
+        else
+            print_warn "No TELEGRAM_CHAT_ID in .env — access.json not written (first message will prompt)"
+            log "WARN" "Skipped access.json — no TELEGRAM_CHAT_ID in $env_file"
+        fi
+    else
+        print_warn ".env not found at $env_file — Telegram plugin needs manual configuration"
+    fi
+}
+
+# Step 7: Install claude-start.sh wrapper script (channels version)
+install_start_script() {
+    print_info "Installing claude-start-channels.sh..."
+
+    local src="$SCRIPT_DIR/claude-start-channels.sh"
+    local dest="${USER_HOME}/claude-start.sh"
+
+    if [ ! -f "$src" ]; then
+        # Fall back to old template if channels script doesn't exist yet
+        local template="$SCRIPT_DIR/claude-start.sh.template"
+        if [ -f "$template" ]; then
+            print_warn "claude-start-channels.sh not found — falling back to old template"
+            sed \
+                -e "s|%%HOME%%|$USER_HOME|g" \
+                -e "s|%%BOT_NAME%%|$BOT_NAME|g" \
+                "$template" > "$dest"
+            chmod +x "$dest"
+            print_success "Installed claude-start.sh (legacy template)"
+            log "INFO" "claude-start.sh written from legacy template to $dest"
+            return 0
+        fi
+        print_error "Neither claude-start-channels.sh nor claude-start.sh.template found in $SCRIPT_DIR"
+        return 1
+    fi
+
+    # Channels startup script is location-independent (uses $REPO_DIR internally)
+    # Just copy it directly — no placeholder substitution needed
+    cp "$src" "$dest"
     chmod +x "$dest"
-    print_success "Installed claude-start.sh"
-    log "INFO" "claude-start.sh written to $dest"
+    print_success "Installed claude-start.sh (channels)"
+    log "INFO" "claude-start-channels.sh copied to $dest"
 }
 
 # Step 7b: Create workspace directory
@@ -701,50 +808,152 @@ install_scripts() {
     print_success "Scripts installed"
 }
 
-# Step 8: Install systemd services
+# Step 8: Install systemd services (channels version)
 install_services() {
     print_info "Installing systemd services..."
 
-    if [ ! -d "$SCRIPT_DIR/services" ]; then
-        print_error "services/ directory not found in $SCRIPT_DIR"
-        return 1
-    fi
-
-    for service_file in "$SCRIPT_DIR"/services/*.service; do
-        if [ ! -f "$service_file" ]; then
-            continue
+    # ── Stop and disable old services that are replaced by channels ──
+    for old_svc in clawdy-bridge.service telegram-bot.service; do
+        if sudo systemctl is-active --quiet "$old_svc" 2>/dev/null; then
+            print_info "Stopping old service: $old_svc"
+            sudo systemctl stop "$old_svc" 2>/dev/null || true
         fi
+        if sudo systemctl is-enabled --quiet "$old_svc" 2>/dev/null; then
+            print_info "Disabling old service: $old_svc"
+            sudo systemctl disable "$old_svc" 2>/dev/null || true
+        fi
+    done
 
-        local service_name=$(basename "$service_file")
-        local dest="/etc/systemd/system/$service_name"
-        local temp_service=$(mktemp)
+    # ── Install claude-code-channels.service ──
+    local channels_service="$SCRIPT_DIR/claude-code-channels.service"
+    if [ -f "$channels_service" ]; then
+        local dest="/etc/systemd/system/claude-code-channels.service"
+        local temp_service
+        temp_service=$(mktemp)
 
         # Substitute placeholders
         sed \
             -e "s|%%USER%%|$SETUP_USER|g" \
             -e "s|%%HOME%%|$(eval echo ~$SETUP_USER)|g" \
-            "$service_file" > "$temp_service"
+            "$channels_service" > "$temp_service"
 
-        # Install with sudo
         sudo tee "$dest" > /dev/null < "$temp_service"
         sudo chmod 644 "$dest"
         rm "$temp_service"
+        print_success "Installed claude-code-channels.service"
+        log "INFO" "Installed claude-code-channels.service to $dest"
+    else
+        print_warn "claude-code-channels.service not found in $SCRIPT_DIR"
+        log "WARN" "claude-code-channels.service not found — skipping"
+    fi
 
-        print_success "Installed $service_name"
-    done
+    # ── Also install any services from services/ directory (legacy compat) ──
+    if [ -d "$SCRIPT_DIR/services" ]; then
+        for service_file in "$SCRIPT_DIR"/services/*.service; do
+            [ -f "$service_file" ] || continue
+
+            local service_name
+            service_name=$(basename "$service_file")
+
+            # Skip old services that are now replaced by channels
+            case "$service_name" in
+                clawdy-bridge.service|telegram-bot.service)
+                    print_info "Skipping old service: $service_name (replaced by channels)"
+                    continue
+                    ;;
+            esac
+
+            local dest="/etc/systemd/system/$service_name"
+            local temp_service
+            temp_service=$(mktemp)
+
+            sed \
+                -e "s|%%USER%%|$SETUP_USER|g" \
+                -e "s|%%HOME%%|$(eval echo ~$SETUP_USER)|g" \
+                "$service_file" > "$temp_service"
+
+            sudo tee "$dest" > /dev/null < "$temp_service"
+            sudo chmod 644 "$dest"
+            rm "$temp_service"
+            print_success "Installed $service_name"
+        done
+    fi
 
     print_info "Reloading systemd daemon..."
     sudo systemctl daemon-reload
 
-    for service_file in "$SCRIPT_DIR"/services/*.service; do
-        if [ ! -f "$service_file" ]; then
-            continue
-        fi
-        local service_name=$(basename "$service_file")
-        sudo systemctl enable "$service_name"
-    done
+    # Enable channels service
+    if [ -f "/etc/systemd/system/claude-code-channels.service" ]; then
+        sudo systemctl enable claude-code-channels.service
+        print_success "Enabled claude-code-channels.service"
+    fi
+
+    # Enable legacy services (excluding replaced ones)
+    if [ -d "$SCRIPT_DIR/services" ]; then
+        for service_file in "$SCRIPT_DIR"/services/*.service; do
+            [ -f "$service_file" ] || continue
+            local service_name
+            service_name=$(basename "$service_file")
+            case "$service_name" in
+                clawdy-bridge.service|telegram-bot.service) continue ;;
+            esac
+            sudo systemctl enable "$service_name"
+        done
+    fi
 
     print_success "Services enabled"
+}
+
+# Step 8b: Install dashboard
+install_dashboard() {
+    print_info "Installing channels dashboard..."
+    local dashboard_src="$SCRIPT_DIR/channels/dashboard.py"
+
+    if [ ! -f "$dashboard_src" ]; then
+        print_warn "channels/dashboard.py not found in $SCRIPT_DIR — skipping dashboard"
+        return 0
+    fi
+
+    # Install as a systemd service for reliability
+    local dashboard_service="/etc/systemd/system/clawdy-dashboard.service"
+    local temp_service
+    temp_service=$(mktemp)
+
+    cat > "$temp_service" << EOFDASH
+[Unit]
+Description=Clawdy Dashboard (web management UI)
+After=network.target
+
+[Service]
+Type=simple
+User=$SETUP_USER
+WorkingDirectory=$(eval echo ~$SETUP_USER)
+ExecStart=/usr/bin/python3 $dashboard_src
+Restart=always
+RestartSec=5
+Environment=HOME=$(eval echo ~$SETUP_USER)
+
+[Install]
+WantedBy=multi-user.target
+EOFDASH
+
+    sudo tee "$dashboard_service" > /dev/null < "$temp_service"
+    sudo chmod 644 "$dashboard_service"
+    rm "$temp_service"
+
+    sudo systemctl daemon-reload
+    sudo systemctl enable clawdy-dashboard.service
+
+    if sudo systemctl start clawdy-dashboard.service; then
+        print_success "Dashboard service installed and started"
+        local port
+        port=$(grep "DASHBOARD_PORT" "$dashboard_src" 2>/dev/null | head -1 | grep -oP '\d{4,}' || echo "8766")
+        print_info "Dashboard available at http://localhost:${port}"
+        log "INFO" "Dashboard installed as systemd service, port $port"
+    else
+        print_warn "Dashboard service failed to start — check: sudo journalctl -u clawdy-dashboard -n 20"
+        log "WARN" "clawdy-dashboard.service failed to start"
+    fi
 }
 
 # Step 8: Security hardening
@@ -781,19 +990,41 @@ harden_security() {
 start_services() {
     print_info "Starting services..."
 
-    for service_file in "$SCRIPT_DIR"/services/*.service; do
-        if [ ! -f "$service_file" ]; then
-            continue
-        fi
-
-        local service_name=$(basename "$service_file")
-
-        if sudo systemctl start "$service_name"; then
-            print_success "Started $service_name"
+    # Start the channels service (primary)
+    if [ -f "/etc/systemd/system/claude-code-channels.service" ]; then
+        if sudo systemctl start claude-code-channels.service; then
+            print_success "Started claude-code-channels.service"
         else
-            print_warn "Failed to start $service_name - check logs: sudo journalctl -u $service_name -n 50"
+            print_warn "Failed to start claude-code-channels.service - check logs: sudo journalctl -u claude-code-channels -n 50"
         fi
-    done
+    fi
+
+    # Start dashboard if installed
+    if [ -f "/etc/systemd/system/clawdy-dashboard.service" ]; then
+        if sudo systemctl start clawdy-dashboard.service; then
+            print_success "Started clawdy-dashboard.service"
+        else
+            print_warn "Failed to start clawdy-dashboard.service - check logs: sudo journalctl -u clawdy-dashboard -n 50"
+        fi
+    fi
+
+    # Start any other legacy services from services/ directory
+    if [ -d "$SCRIPT_DIR/services" ]; then
+        for service_file in "$SCRIPT_DIR"/services/*.service; do
+            [ -f "$service_file" ] || continue
+            local service_name
+            service_name=$(basename "$service_file")
+            # Skip services replaced by channels or already started
+            case "$service_name" in
+                clawdy-bridge.service|telegram-bot.service) continue ;;
+            esac
+            if sudo systemctl start "$service_name"; then
+                print_success "Started $service_name"
+            else
+                print_warn "Failed to start $service_name - check logs: sudo journalctl -u $service_name -n 50"
+            fi
+        done
+    fi
 }
 
 # Main execution
@@ -831,19 +1062,29 @@ main() {
     is_done "claude_json"  || { patch_claude_json; mark_done "claude_json"; }
     is_done "identity"     || { install_bot_identity; mark_done "identity"; }
     is_done "env_file"     || { write_env_file; mark_done "env_file"; }
-    is_done "mcp_server"   || { install_mcp_server; mark_done "mcp_server"; }
-    is_done "start_script" || { install_start_script; mark_done "start_script"; }
-    is_done "scripts"      || { install_scripts; mark_done "scripts"; }
+    is_done "mcp_server"       || { install_mcp_server; mark_done "mcp_server"; }
+    is_done "telegram_plugin"  || { install_telegram_plugin; mark_done "telegram_plugin"; }
+    is_done "start_script"     || { install_start_script; mark_done "start_script"; }
+    is_done "scripts"          || { install_scripts; mark_done "scripts"; }
 
     # Stop any running services before reinstalling
-    for service_file in "$SCRIPT_DIR"/services/*.service; do
-        [ -f "$service_file" ] || continue
-        local svc=$(basename "$service_file")
+    for svc in claude-code-channels.service clawdy-dashboard.service; do
         if sudo systemctl is-active --quiet "$svc" 2>/dev/null; then
             print_info "Stopping $svc..."
             sudo systemctl stop "$svc" 2>/dev/null || true
         fi
     done
+    if [ -d "$SCRIPT_DIR/services" ]; then
+        for service_file in "$SCRIPT_DIR"/services/*.service; do
+            [ -f "$service_file" ] || continue
+            local svc
+            svc=$(basename "$service_file")
+            if sudo systemctl is-active --quiet "$svc" 2>/dev/null; then
+                print_info "Stopping $svc..."
+                sudo systemctl stop "$svc" 2>/dev/null || true
+            fi
+        done
+    fi
 
     echo
     print_info "Next: Install systemd services (requires sudo)"
@@ -854,7 +1095,8 @@ main() {
         return 0
     fi
 
-    is_done "services" || { install_services || { log "ERROR" "Service installation failed"; return 1; }; mark_done "services"; }
+    is_done "services"  || { install_services || { log "ERROR" "Service installation failed"; return 1; }; mark_done "services"; }
+    is_done "dashboard" || { install_dashboard; mark_done "dashboard"; }
 
     echo
     if confirm "Enable security hardening (UFW + Tailscale)?"; then
@@ -871,8 +1113,9 @@ main() {
     print_success "EasyClaw setup complete!"
     echo
     echo "  Next steps:"
-    echo "    • Check service status: sudo systemctl status claude-code"
-    echo "    • View logs: sudo journalctl -u claude-code -f"
+    echo "    • Check service status: sudo systemctl status claude-code-channels"
+    echo "    • View logs: sudo journalctl -u claude-code-channels -f"
+    echo "    • Dashboard: sudo systemctl status clawdy-dashboard"
     echo "    • Configure Telegram: Send /start to your bot"
     echo
     echo "  📝 Setup log: $LOG_FILE"
