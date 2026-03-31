@@ -793,6 +793,12 @@ def enqueue_injection(text: str, sender: str, source: str = "dashboard"):
     Posts to the local broker HTTP endpoint so messages arrive via the
     easyclaw-bridge MCP channel. Falls back to tmux inject if broker is down.
     """
+    # Slash commands bypass the broker and go straight to tmux
+    if text.startswith("/"):
+        log_chat_history("in", sender, text, source=source)
+        inject_to_claude(text)
+        return
+
     import urllib.request
     broker_port = int(os.environ.get("BROKER_PORT", "7899"))
     payload = json.dumps({
