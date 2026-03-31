@@ -347,107 +347,6 @@ def _read_peers() -> dict:
     return {}
 
 
-def impl_send_to_peer(message: str, recipient: str = "", sender: str = "") -> str:
-    """POST a message to the peer bot's bridge /inject endpoint over Tailscale.
-
-    HTTP 200 = bridge confirmed receipt and tmux inject succeeded = delivered.
-    On failure, spawns a background thread to retry after 30s so Claude
-    isn't blocked. Alerts Ben only if retry also fails.
-
-    recipient: name from peers.json (e.g. "karly"). If omitted, falls back to PEER_BRIDGE_URL in .env.
-    """
-    import threading as _threading
-    import time as _time
-    import requests as _req
-    if not sender:
-        sender = _read_identity()
-    env = load_env()
-    api_key = env.get("BRIDGE_API_KEY", "")
-    if not api_key:
-        return "BRIDGE_API_KEY not set in .env."
-
-    if recipient:
-        peers = _read_peers()
-        if recipient not in peers:
-            known = ", ".join(peers.keys()) if peers else "none"
-            return f"Unknown recipient '{recipient}'. Known peers: {known}. Add to ~/.easyclaw/peers.json."
-        peer_url = f"http://{peers[recipient]}:8766"
-    else:
-        peer_url = env.get("PEER_BRIDGE_URL", "").rstrip("/")
-        if not peer_url:
-            return "No recipient specified and PEER_BRIDGE_URL not set in .env."
-
-    def _attempt() -> tuple[bool, str]:
-        ts = datetime.now().strftime("%Y-%m-%d %H:%M")
-        try:
-            r = _req.post(
-                f"{peer_url}/inject",
-                json={"message": message, "sender": sender, "timestamp": ts},
-                headers={"X-API-Key": api_key},
-                timeout=10,
-            )
-            if r.status_code == 200:
-                return True, ""
-            return False, f"bridge returned {r.status_code}: {r.text}"
-        except Exception as e:
-            return False, f"unreachable: {e}"
-
-    ok, err = _attempt()
-    if ok:
-        # Log outgoing peer message to local dashboard
-        try:
-            bridge_port = int(env.get("BRIDGE_PORT", "8765")) + 1  # local HTTP port (HTTPS port + 1)
-            import requests as _req2
-            _req2.post(
-                f"http://127.0.0.1:{bridge_port}/chat",
-                json={"message": message, "sender": sender, "source": "peer-out", "dir": "out"},
-                timeout=3,
-            )
-        except Exception:
-            pass
-        return f"Sent to peer: {message[:80]}"
-
-    # First attempt failed — retry in background so MCP isn't blocked for 30s
-    def _retry():
-        _time.sleep(30)
-        ok2, err2 = _attempt()
-        if not ok2:
-            alert = f"⚠️ Peer message failed after retry:\n\"{message[:80]}\"\n{err2}"
-            impl_telegram_send(alert)
-            # Also inject into local tmux so the bot sees it in context
-            try:
-                bridge_port = int(env.get("BRIDGE_PORT", "8765")) + 1
-                import requests as _rq
-                _rq.post(
-                    f"http://127.0.0.1:{bridge_port}/inject",
-                    json={"message": alert, "sender": "system", "source": "system"},
-                    headers={"X-API-Key": env.get("BRIDGE_API_KEY", "")},
-                    timeout=3,
-                )
-            except Exception:
-                pass
-
-    _threading.Thread(target=_retry, daemon=True).start()
-    return f"Sent to peer (retry pending): {message[:80]}"
-
-
-TOTP_SECRETS_FILE = Path.home() / ".easyclaw" / "totp_secrets.json"
-
-
-def impl_totp_generate(account: str) -> str:
-    """Generate a current TOTP code for a stored account."""
-    import json
-    import pyotp
-    if not TOTP_SECRETS_FILE.exists():
-        return f"No TOTP secrets file found. Add accounts first with totp_add."
-    with open(TOTP_SECRETS_FILE) as f:
-        secrets = json.load(f)
-    if account not in secrets:
-        available = ", ".join(secrets.keys()) or "none"
-        return f"Account '{account}' not found. Available: {available}"
-    code = pyotp.TOTP(secrets[account]).now()
-    return f"{code}"
-
 
 def impl_activity_log(category: str, description: str) -> str:
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -976,17 +875,6 @@ async def list_tools() -> list[types.Tool]:
             },
         ),
         types.Tool(
-            name="totp_generate",
-            description="Generate the current TOTP 2FA code for a stored account (e.g. 'flewmoltbot').",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "account": {"type": "string", "description": "Account name (e.g. 'flewmoltbot')"},
-                },
-                "required": ["account"],
-            },
-        ),
-        types.Tool(
             name="telegram_send",
             description="Send a message to the user via Telegram. Typing indicator is managed automatically by the bridge.",
             inputSchema={
@@ -1017,28 +905,6 @@ async def list_tools() -> list[types.Tool]:
                     },
                 },
                 "required": ["file_path"],
-            },
-        ),
-        types.Tool(
-            name="send_to_peer",
-            description="Send a message to a peer bot over Tailscale. Peer IPs are loaded from ~/.easyclaw/peers.json (e.g. {\"karly\": \"100.x.x.x\"}). Always uses port 8766 (plain HTTP). The peer bot receives it as a TELEGRAM injection.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "message": {
-                        "type": "string",
-                        "description": "Message to send to the peer bot",
-                    },
-                    "recipient": {
-                        "type": "string",
-                        "description": "Peer name from peers.json (e.g. 'karly'). Falls back to PEER_BRIDGE_URL if omitted.",
-                    },
-                    "sender": {
-                        "type": "string",
-                        "description": "Display name shown to the peer (default: reads from ~/.easyclaw/identity)",
-                    },
-                },
-                "required": ["message"],
             },
         ),
         types.Tool(
@@ -1283,8 +1149,6 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextCont
             result = impl_memory_show(int(arguments["id"]))
         elif name == "memory_list":
             result = impl_memory_list(int(arguments.get("days", 7)))
-        elif name == "totp_generate":
-            result = impl_totp_generate(arguments["account"])
         elif name == "telegram_send":
             result = impl_telegram_send(
                 arguments["message"],
@@ -1293,12 +1157,6 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextCont
         elif name == "telegram_send_file":
             result = impl_telegram_send_file(
                 arguments["file_path"], arguments.get("caption")
-            )
-        elif name == "send_to_peer":
-            result = impl_send_to_peer(
-                arguments["message"],
-                arguments.get("recipient", ""),
-                arguments.get("sender", ""),
             )
         elif name == "activity_log":
             result = impl_activity_log(arguments["category"], arguments["description"])
