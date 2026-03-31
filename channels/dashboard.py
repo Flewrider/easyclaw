@@ -776,24 +776,41 @@ def inject_to_claude(text: str) -> bool:
 
 
 def enqueue_injection(text: str, sender: str, source: str = "dashboard"):
-    """Format and inject a message into the Claude tmux session.
+    """Send a message via the broker (channels system) or fall back to tmux injection.
 
-    Adds the appropriate trigger-rule prefix based on source:
-    - dashboard → [TELEGRAM from {sender} | {ts}]: {text}
-    - cron      → [CRON | {ts}] {text}
-    - other     → text injected as-is
+    Posts to the local broker HTTP endpoint so messages arrive via the
+    easyclaw-bridge MCP channel. Falls back to tmux inject if broker is down.
     """
-    ts = datetime.now().strftime("%Y-%m-%d %H:%M")
-    if text.startswith("/"):
-        display = text
-    elif source == "dashboard":
-        display = f"[TELEGRAM from {sender} | {ts}]: {text}"
-    elif source == "cron":
-        display = f"[CRON | {ts}] {text}"
-    else:
-        display = text
-    log_chat_history("in", sender, text, source=source)
-    inject_to_claude(display)
+    import urllib.request
+    broker_port = int(os.environ.get("BROKER_PORT", "7899"))
+    payload = json.dumps({
+        "source": source,
+        "sender": sender,
+        "content": text,
+    }).encode()
+
+    try:
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{broker_port}/send",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+        )
+        urllib.request.urlopen(req, timeout=5)
+        log.info("Message sent to broker: %s/%s: %s", source, sender, text[:60])
+    except Exception as e:
+        log.warning("Broker unavailable (%s), falling back to tmux inject", e)
+        # Fall back to tmux injection
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M")
+        if text.startswith("/"):
+            display = text
+        elif source == "dashboard":
+            display = f"[TELEGRAM from {sender} | {ts}]: {text}"
+        elif source == "cron":
+            display = f"[CRON | {ts}] {text}"
+        else:
+            display = text
+        log_chat_history("in", sender, text, source=source)
+        inject_to_claude(display)
 
 
 # ── Whisper (optional — for push-to-talk transcription) ──────────────────────
