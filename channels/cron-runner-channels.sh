@@ -1,14 +1,25 @@
 #!/bin/bash
 # Cron runner for channels system — POSTs to broker instead of tmux inject.
 #
-# Usage: cron-runner-channels.sh CRON_NAME "message content"
+# Usage: clawdy-cron-runner.sh CRON_NAME ["message content"]
+# If no message provided, auto-builds from the cron's .md file.
 # The broker persists the message; the channel MCP server delivers it to Claude.
 
 CRON_NAME="${1:-HEARTBEAT}"
-MESSAGE="${2:-}"
-BROKER_PORT="${BROKER_PORT:-7899}"
 EASYCLAW="$HOME/.easyclaw"
+CRONS_DIR="$EASYCLAW/workspace/crons"
+MD_FILE="$CRONS_DIR/${CRON_NAME}.md"
+BROKER_PORT="${BROKER_PORT:-7899}"
 STATUS_FILE="$EASYCLAW/status"
+
+# Build message: use explicit arg or auto-build from .md file
+if [ -n "${2:-}" ]; then
+    MESSAGE="$2"
+elif [ -f "$MD_FILE" ]; then
+    MESSAGE="[CRON - ${CRON_NAME}] Read ${MD_FILE} and follow its instructions carefully."
+else
+    MESSAGE="[CRON - ${CRON_NAME}] No prompt file found."
+fi
 
 # Check busy status for heartbeat crons
 if [ "$CRON_NAME" = "HEARTBEAT" ] && [ -f "$STATUS_FILE" ]; then

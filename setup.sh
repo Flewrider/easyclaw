@@ -789,6 +789,13 @@ install_scripts() {
         fi
     done
 
+    # Replace cron runner with channels version (POSTs to broker instead of tmux inject)
+    local channels_cron="$SCRIPT_DIR/channels/cron-runner-channels.sh"
+    if [ -f "$channels_cron" ]; then
+        cp "$channels_cron" "${USER_HOME}/.easyclaw/scripts/clawdy-cron-runner.sh"
+        print_success "Replaced cron runner with channels version (broker-based)"
+    fi
+
     # Make all scripts executable
     chmod +x "${USER_HOME}/.easyclaw/scripts/"*.sh 2>/dev/null || true
     chmod +x "${USER_HOME}/.easyclaw/scripts/"*.py 2>/dev/null || true
@@ -847,6 +854,42 @@ install_services() {
         log "WARN" "claude-code-channels.service not found — skipping"
     fi
 
+    # ── Install easyclaw-broker.service ──
+    local broker_src="$SCRIPT_DIR/channels/easyclaw-bridge/broker.py"
+    if [ -f "$broker_src" ]; then
+        local broker_dest="/etc/systemd/system/easyclaw-broker.service"
+        local temp_broker
+        temp_broker=$(mktemp)
+
+        cat > "$temp_broker" << EOFBROKER
+[Unit]
+Description=Easyclaw Message Broker (SQLite-backed message queue for Claude channels)
+After=network.target
+Before=claude-code-channels.service
+
+[Service]
+Type=simple
+User=$SETUP_USER
+WorkingDirectory=$(eval echo ~$SETUP_USER)
+ExecStart=/usr/bin/python3 $broker_src
+Restart=always
+RestartSec=5
+Environment=HOME=$(eval echo ~$SETUP_USER)
+Environment=BROKER_PORT=7899
+
+[Install]
+WantedBy=multi-user.target
+EOFBROKER
+
+        sudo tee "$broker_dest" > /dev/null < "$temp_broker"
+        sudo chmod 644 "$broker_dest"
+        rm "$temp_broker"
+        print_success "Installed easyclaw-broker.service"
+        log "INFO" "Installed easyclaw-broker.service to $broker_dest"
+    else
+        print_warn "channels/easyclaw-bridge/broker.py not found — skipping broker service"
+    fi
+
     # ── Also install any services from services/ directory (legacy compat) ──
     if [ -d "$SCRIPT_DIR/services" ]; then
         for service_file in "$SCRIPT_DIR"/services/*.service; do
@@ -881,6 +924,12 @@ install_services() {
 
     print_info "Reloading systemd daemon..."
     sudo systemctl daemon-reload
+
+    # Enable broker service (starts before Claude)
+    if [ -f "/etc/systemd/system/easyclaw-broker.service" ]; then
+        sudo systemctl enable easyclaw-broker.service
+        print_success "Enabled easyclaw-broker.service"
+    fi
 
     # Enable channels service
     if [ -f "/etc/systemd/system/claude-code-channels.service" ]; then
