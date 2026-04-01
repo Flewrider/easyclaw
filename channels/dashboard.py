@@ -1250,13 +1250,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
     # ── Services ──────────────────────────────────────────────────────────
 
     def _serve_services(self):
-        # Core systemd services to always check
-        systemd_services = [
-            "claude-code-channels.service",
-            "claude-code.service",      # legacy, may be disabled
-            "clawdy-bridge.service",    # legacy, may be disabled
-        ]
-        # Scan for additional loaded services matching known patterns
+        # Dead/legacy services to never show
+        hidden_services = {"claude-code.service", "clawdy-bridge.service"}
+        # Services managed by systemd — skip process-level dedup for these
+        systemd_managed = set()
+
+        # Scan all active/loaded services matching known patterns
+        systemd_services = ["claude-code-channels.service"]
         try:
             r = subprocess.run(
                 ["systemctl", "list-units", "--no-legend", "--no-pager",
@@ -1267,6 +1267,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 parts = line.split()
                 if parts:
                     name = parts[0]
+                    if name in hidden_services:
+                        continue
                     if any(x in name for x in ("meme-scanner", "fomofollow", "clawdy-", "easyclaw-", "brainrot")):
                         if name not in systemd_services:
                             systemd_services.append(name)
@@ -1280,11 +1282,17 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     ["systemctl", "is-active", svc],
                     capture_output=True, text=True, timeout=5,
                 )
-                statuses.append({"name": svc, "active": r.stdout.strip() == "active"})
+                active = r.stdout.strip() == "active"
+                statuses.append({"name": svc, "active": active})
+                # Track which script names are covered by systemd so we skip process dedup
+                if "broker" in svc:
+                    systemd_managed.add("broker.py")
+                if "dashboard" in svc:
+                    systemd_managed.add("dashboard.py")
             except Exception:
                 statuses.append({"name": svc, "active": False})
 
-        # Process-based services (broker and dashboard run as plain processes)
+        # Process-based checks — only show if NOT already covered by a systemd service
         process_checks = [
             ("broker (process)", "broker.py"),
             ("dashboard (process)", "dashboard.py"),
@@ -1295,6 +1303,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             )
             ps_lines = ps.stdout.splitlines()
             for display_name, script_name in process_checks:
+                if script_name in systemd_managed:
+                    continue  # Already shown via systemd service entry
                 pid = None
                 for line in ps_lines:
                     if script_name in line and "python" in line:
@@ -1310,8 +1320,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     entry["pid"] = pid
                 statuses.append(entry)
         except Exception:
-            for display_name, _ in process_checks:
-                statuses.append({"name": display_name, "active": False})
+            pass
 
         self._json({"services": statuses})
 
