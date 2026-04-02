@@ -270,15 +270,8 @@ def impl_telegram_send(message: str, chat_id: int | str | None = None) -> str:
         else:
             return f"Failed to send chunk: {result}"
 
-    # Log outbound message to chat history (dashboard reads this)
-    try:
-        import json as _json, time as _time
-        hist = Path.home() / ".easyclaw" / "chat-history.jsonl"
-        with open(hist, "a") as _f:
-            _f.write(_json.dumps({"ts": _time.time(), "dir": "out", "sender": "Clawdy",
-                                  "text": message, "source": "out"}) + "\n")
-    except Exception:
-        pass
+    # Note: outbound chat history logging is handled by the PostToolUse hook
+    # (hook-log-telegram-out.py) to avoid duplicates.
 
     # Notify bridge to clear typing indicator immediately (don't wait for next SSE tick)
     try:
@@ -717,14 +710,14 @@ def impl_project_delete(name: str) -> str:
 def impl_reminder_set(message: str, when: str) -> str:
     """Schedule a one-shot reminder using the system `at` daemon."""
     import re
-    session = "claude"
-    window  = "claude"
-    safe_msg = message.replace("'", "'\\''")
+    broker_port = int(os.environ.get("BROKER_PORT", "7899"))
+    safe_msg = message.replace("'", "\\'").replace('"', '\\"')
     script = (
         f"#!/bin/bash\n"
-        f"tmux send-keys -t {session}:{window} '[TELEGRAM from System]: [REMINDER] {safe_msg}'\n"
-        f"sleep 0.3\n"
-        f"tmux send-keys -t {session}:{window} '' Enter\n"
+        f"curl -s -X POST http://127.0.0.1:{broker_port}/send "
+        f"-H 'Content-Type: application/json' "
+        f"-d '{{\"source\":\"reminder\",\"sender\":\"System\",\"content\":\"[REMINDER] {safe_msg}\"}}' || "
+        f"tmux send-keys -t claude:claude '[REMINDER] {safe_msg}' Enter\n"
     )
     try:
         result = subprocess.run(
