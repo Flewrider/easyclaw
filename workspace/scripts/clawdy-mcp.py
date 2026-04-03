@@ -712,12 +712,22 @@ def impl_reminder_set(message: str, when: str) -> str:
     import re
     broker_port = int(os.environ.get("BROKER_PORT", "7899"))
     safe_msg = message.replace("'", "\\'").replace('"', '\\"')
+    log_file = os.path.expanduser("~/.easyclaw/reminder-failures.log")
     script = (
         f"#!/bin/bash\n"
-        f"curl -s -X POST http://127.0.0.1:{broker_port}/send "
+        f"DELIVERED=0\n"
+        f"for i in 1 2 3; do\n"
+        f"  if curl -s --max-time 5 -X POST http://127.0.0.1:{broker_port}/send "
         f"-H 'Content-Type: application/json' "
-        f"-d '{{\"source\":\"reminder\",\"sender\":\"System\",\"content\":\"[REMINDER] {safe_msg}\"}}' || "
-        f"tmux send-keys -t claude:claude '[REMINDER] {safe_msg}' Enter\n"
+        f"-d '{{\"source\":\"reminder\",\"sender\":\"System\",\"content\":\"[REMINDER] {safe_msg}\"}}' > /dev/null 2>&1; then\n"
+        f"    DELIVERED=1; break\n"
+        f"  fi\n"
+        f"  sleep 2\n"
+        f"done\n"
+        f"if [ \"$DELIVERED\" = \"0\" ]; then\n"
+        f"  echo \"$(date -Iseconds) FAILED to deliver reminder via broker: {safe_msg}\" >> {log_file}\n"
+        f"  tmux send-keys -t claude:claude '[REMINDER] {safe_msg}' Enter 2>/dev/null || true\n"
+        f"fi\n"
     )
     try:
         result = subprocess.run(
