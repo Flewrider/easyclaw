@@ -73,18 +73,38 @@ echo "[channels] Repo:     $REPO_DIR"
 
 tmux new-session -d -s "$SESSION" -c "$HOME" -n "claude" \
   "while true; do \
-    (sleep 5 && tmux send-keys -t claude Enter 2>/dev/null) & \
     $CLAUDE \"\$(cat $CTX_FILE)\" --continue --dangerously-skip-permissions --chrome \
       --mcp-config $CHANNELS_MCP \
       --channels plugin:telegram@claude-plugins-official \
       --dangerously-load-development-channels server:easyclaw-bridge \
-    || { (sleep 5 && tmux send-keys -t claude Enter 2>/dev/null) & \
-    $CLAUDE \"\$(cat $CTX_FILE)\" --dangerously-skip-permissions --chrome \
+    || $CLAUDE \"\$(cat $CTX_FILE)\" --dangerously-skip-permissions --chrome \
       --mcp-config $CHANNELS_MCP \
       --channels plugin:telegram@claude-plugins-official \
-      --dangerously-load-development-channels server:easyclaw-bridge; }; \
+      --dangerously-load-development-channels server:easyclaw-bridge; \
     echo \"[claude exited — restarting in 3s...]\"; sleep 3; \
   done"
+
+# ── Auto-confirm the dev-channels startup prompt ──────────────────────
+# Every claude (re)launch above runs with --dangerously-load-development-channels,
+# which shows a blocking confirmation:
+#     ❯ 1. I am using this for local development
+#       2. Exit
+#     Enter to confirm · Esc to cancel
+# Option 1 is pre-selected, so a bare Enter confirms it. Without this, a fresh
+# start OR any crash-relaunch inside the while-loop hangs at the prompt until
+# something incidentally sends an Enter (observed: hours-long stalls after a
+# crash). This watcher runs for the life of the session and presses Enter ONLY
+# when the prompt is actually on screen, so no stray keystrokes reach the REPL.
+(
+  while tmux has-session -t "$SESSION" 2>/dev/null; do
+    if tmux capture-pane -pt "$SESSION" 2>/dev/null \
+         | grep -qE "local development|Enter to confirm"; then
+      tmux send-keys -t "$SESSION" Enter 2>/dev/null
+      sleep 3   # let claude consume the prompt before re-checking (avoid double-send)
+    fi
+    sleep 1
+  done
+) &
 
 # Wait for tmux session
 while tmux has-session -t "$SESSION" 2>/dev/null; do sleep 2; done
