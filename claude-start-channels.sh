@@ -52,17 +52,6 @@ EOFM
 mkdir -p "$EASYCLAW/logs"
 echo "idle" > "$EASYCLAW/status"
 
-# ── Generation marker: retire superseded instances without killing anything ──
-# A restart leaves the OLD script's poll loops (the wait loop + the dev-channels
-# watcher below) running — their `tmux has-session` check misses the sub-second
-# kill/recreate window, so they never exit and pile up across restarts (and would
-# accumulate watchers -> duplicate Enters). Instead of hunting and killing stale
-# PIDs (risky — the systemd MainPID must never be killed or it restart-loops), we
-# stamp our PID here; every loop below bails the moment a NEWER instance overwrites
-# this file. Stale instances self-retire within one tick. No process is ever killed.
-GEN_FILE="$EASYCLAW/channels-script.pid"
-echo $$ > "$GEN_FILE"
-
 # ── Determine restart context ─────────────────────────────────────────
 RESUME="$EASYCLAW/restart-resume"
 CTX_FILE="$EASYCLAW/current-context"
@@ -84,46 +73,47 @@ echo "[channels] Repo:     $REPO_DIR"
 
 tmux new-session -d -s "$SESSION" -c "$HOME" -n "claude" \
   "while true; do \
+    (sleep 5 && tmux send-keys -t claude Enter 2>/dev/null) & \
     $CLAUDE \"\$(cat $CTX_FILE)\" --continue --dangerously-skip-permissions --chrome \
       --mcp-config $CHANNELS_MCP \
       --channels plugin:telegram@claude-plugins-official \
       --dangerously-load-development-channels server:easyclaw-bridge \
-    || $CLAUDE \"\$(cat $CTX_FILE)\" --dangerously-skip-permissions --chrome \
+    || { (sleep 5 && tmux send-keys -t claude Enter 2>/dev/null) & \
+    $CLAUDE \"\$(cat $CTX_FILE)\" --dangerously-skip-permissions --chrome \
       --mcp-config $CHANNELS_MCP \
       --channels plugin:telegram@claude-plugins-official \
-      --dangerously-load-development-channels server:easyclaw-bridge; \
+      --dangerously-load-development-channels server:easyclaw-bridge; }; \
     echo \"[claude exited — restarting in 3s...]\"; sleep 3; \
   done"
 
-# ── Auto-confirm the dev-channels startup prompt ──────────────────────
-# Every claude (re)launch above runs with --dangerously-load-development-channels,
-# which shows a blocking confirmation:
-#     ❯ 1. I am using this for local development
-#       2. Exit
-#     Enter to confirm · Esc to cancel
-# Option 1 is pre-selected, so a bare Enter confirms it. Without this, a fresh
-# start OR any crash-relaunch inside the while-loop hangs at the prompt until
-# something incidentally sends an Enter (observed: hours-long stalls after a
-# crash). This watcher runs for the life of the session and presses Enter ONLY
-# when the prompt is actually on screen, so no stray keystrokes reach the REPL.
+# ── Startup safety-net for the dev-channels prompt ────────────────────
+# The in-loop `sleep 5 && send Enter` above is a ONE-SHOT at a fixed 5s. If claude
+# isn't at the prompt yet (slow start / big --continue context reload), that keystroke
+# is wasted and the session hangs at the prompt indefinitely (observed: hours-long
+# stall after the 2026-07-21 crash). This retries until the prompt is actually gone.
+#
+# Two hard rules learned from the 2026-07-24 churn:
+#  1. STRICT match — require BOTH option lines. Matching loose text like
+#     "Enter to confirm" alone fires on any REPL output that merely *mentions* the
+#     prompt (e.g. me messaging Ben about it), injecting stray Enters into a live
+#     session. That feedback loop is what caused the restart churn.
+#  2. BOUNDED — give up after STARTUP_CONFIRM_SECS. A watcher that lives for the
+#     whole session can always be tripped later; the in-loop Enter covers relaunches.
+STARTUP_CONFIRM_SECS=90
 (
-  while tmux has-session -t "$SESSION" 2>/dev/null; do
-    # Retire if a newer script instance has taken over (see generation marker).
-    # $$ inside this subshell is the parent script's PID, which is what we stamped.
-    [ "$(cat "$GEN_FILE" 2>/dev/null)" = "$$" ] || exit 0
-    if tmux capture-pane -pt "$SESSION" 2>/dev/null \
-         | grep -qE "local development|Enter to confirm"; then
+  _deadline=$(( SECONDS + STARTUP_CONFIRM_SECS ))
+  while [ "$SECONDS" -lt "$_deadline" ]; do
+    tmux has-session -t "$SESSION" 2>/dev/null || exit 0
+    _pane=$(tmux capture-pane -pt "$SESSION" 2>/dev/null)
+    if printf '%s' "$_pane" | grep -q "1\. I am using this for local development" \
+       && printf '%s' "$_pane" | grep -q "2\. Exit"; then
       tmux send-keys -t "$SESSION" Enter 2>/dev/null
-      sleep 3   # let claude consume the prompt before re-checking (avoid double-send)
+      sleep 3                      # let claude consume it, then confirm it cleared
+      continue
     fi
     sleep 1
   done
 ) &
 
-# Wait for tmux session. NOTE: deliberately NO generation-retire check here — if
-# this process is the systemd MainPID, exiting would trip Restart=always and cause
-# a spurious restart. A lingering wait loop is harmless (pure sleep, no side effects,
-# no watcher); only the dev-channels watcher above must retire to avoid duplicate
-# Enters, and it does so safely because a backgrounded subshell exiting is invisible
-# to systemd.
+# Wait for tmux session
 while tmux has-session -t "$SESSION" 2>/dev/null; do sleep 2; done
