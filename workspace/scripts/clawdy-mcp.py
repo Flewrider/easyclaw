@@ -705,7 +705,37 @@ def impl_project_delete(name: str) -> str:
     _save_projects(new)
     return f"Project '{name}' removed."
 
+import re  # noqa: E402  (module-level: used by _normalise_at_spec)
+
 # ── Reminder tools ────────────────────────────────────────────────────────────
+
+_AT_DATE_FIRST = re.compile(
+    r"^\s*(?P<date>tomorrow|today|\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}(?:/\d{2,4})?)"
+    r"\s+(?P<time>\d{1,2}:\d{2}\s*(?:am|pm)?|\d{1,2}\s*(?:am|pm)|noon|midnight)\s*$",
+    re.IGNORECASE,
+)
+
+
+def _normalise_at_spec(when: str) -> str:
+    """Reorder a date-first spec into the TIME-then-DATE order `at` actually requires.
+
+    `at(1)` takes TIME first and DATE second, so "9am tomorrow" parses while
+    "tomorrow 9am" dies with "Garbled time". Every natural phrasing a person (or an
+    LLM) reaches for puts the date first — and this tool's own documented examples
+    did too: 'tomorrow 9am' and '2026-03-01 14:00' were both advertised as valid and
+    both failed 100% of the time. Any reminder ever scheduled with a date in it was
+    silently never created.
+
+    Reordering rather than only correcting the docs, because the docs were not the
+    problem: the accepted phrasing was the one nobody writes. Specs that do not match
+    the date-first shape pass through untouched, so '20:00', '8pm' and
+    'now + 2 hours' behave exactly as before.
+    """
+    m = _AT_DATE_FIRST.match(when or "")
+    if not m:
+        return when
+    return f"{m.group('time').strip()} {m.group('date').strip()}"
+
 
 def impl_reminder_set(message: str, when: str) -> str:
     """Schedule a one-shot reminder using the system `at` daemon."""
@@ -731,7 +761,7 @@ def impl_reminder_set(message: str, when: str) -> str:
     )
     try:
         result = subprocess.run(
-            ["at", when],
+            ["at", *_normalise_at_spec(when).split()],
             input=script,
             capture_output=True,
             text=True,
@@ -1045,7 +1075,7 @@ async def list_tools() -> list[types.Tool]:
                 "Schedule a one-shot reminder that will be injected into your session at the specified time. "
                 "Use this instead of task_add when you need something triggered at a specific time. "
                 "`when` accepts natural `at`-style strings: '20:00', '8pm', 'now + 2 hours', "
-                "'now + 30 minutes', 'tomorrow 9am', '2026-03-01 14:00'."
+                "'now + 30 minutes', 'tomorrow 9am', '2026-03-01 14:00' (date-first forms are reordered automatically)."
             ),
             inputSchema={
                 "type": "object",
