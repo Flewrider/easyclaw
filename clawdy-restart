@@ -35,15 +35,27 @@ RESUME_EOF
 echo "[$TIMESTAMP] system: Restarting — $REASON" >> "$LOG_FILE"
 echo "Restarting Claude Code (reason: $REASON)..."
 
-# Try dashboard API first (preferred — managed restart via clawdy-bridge)
+# Try dashboard API first (preferred — managed restart via clawdy-bridge).
+#
+# MUST be https. The dashboard logs "TLS enabled — serving HTTPS on 0.0.0.0:8765"
+# and then, misleadingly, "Dashboard available at http://0.0.0.0:8765" on the very
+# next line. This script believed the second line, so every request died with
+# "Connection reset by peer" (plaintext to a TLS socket), the API path NEVER
+# succeeded, and EVERY self-restart silently took the fallback below.
+# -k because the cert is self-signed.
 BRIDGE_PORT=$(grep "^BRIDGE_PORT=" "$HOME/.easyclaw/.env" 2>/dev/null | cut -d= -f2)
 BRIDGE_PORT="${BRIDGE_PORT:-8765}"
-if curl -sf --max-time 3 -X POST "http://127.0.0.1:$BRIDGE_PORT/api/claude-start" > /dev/null 2>&1; then
+if curl -skf --max-time 3 -X POST "https://127.0.0.1:$BRIDGE_PORT/api/claude-start" > /dev/null 2>&1; then
   echo "  Restarted via dashboard API (port $BRIDGE_PORT)"
 else
-  # Fallback: direct tmux kill + relaunch
-  echo "  Dashboard API unreachable — falling back to direct restart"
-  tmux kill-session -t claude 2>/dev/null || true
-  sleep 1
-  bash "$HOME/claude-start.sh" &
+  # Fallback: hand the restart to systemd. Do NOT kill tmux and relaunch the start
+  # script by hand — that was the old fallback and it caused the double-restart:
+  # killing the session makes the systemd-supervised script exit, so systemd
+  # restarts the unit ~10s later, while the manual `bash ... &` had already started
+  # a session and CONSUMED the single-use restart-resume file. The systemd copy then
+  # killed that session, found no resume note, and reported "you crashed
+  # unexpectedly". Letting systemd own the restart gives exactly one session and
+  # leaves the resume note for it to read.
+  echo "  Dashboard API unreachable — restarting via systemd"
+  systemctl restart claude-code-channels.service
 fi
